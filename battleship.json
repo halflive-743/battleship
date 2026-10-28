@@ -1,0 +1,9 @@
+{
+  "id": "battleship",
+  "name": "Grid Strike",
+  "ver": "1.0",
+  "desc": "1v1 naval Battleship combat over LoRa Mesh with lockstep handshakes, commit-reveal anti-cheat audit, and offline AI.",
+  "icon": "game",
+  "requires": "sdk_ext",
+  "seed": false
+}
