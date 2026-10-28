@@ -1,12 +1,12 @@
 # Grid Strike: 1v1 LoRa Battleship for WADAMESH (Lua 5.4) — v1.0
 
-A high-contrast, tactical naval radar **Battleship** game ("Grid Strike") designed for **LilyGo T-Deck** (ESP32-S3) and other MeshCore / WADAMESH boards using the on-device **WADAMESH Lua App SDK (`wada.*` API v1)**.
+A high-contrast, tactical naval radar **Battleship** game ("Grid Strike") designed for the **LilyGo T-Deck Plus** (ESP32-S3) using the on-device **WADAMESH Lua App SDK (`wada.*` API v1)**.
 
 Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **strict lockstep turn-based combat with explicit ACK handshakes**, a **salted commit-reveal anti-cheat audit**, **crash recovery persistence**, and **tactile screen-shake / audio feedback**. It also includes a smart offline **Hunt/Target AI** mode for solo play.
 
 ---
 
-## Project Structure & WADAMESH Store Bundle
+## Project Structure
 
 ```text
 ├── battleship.lua                    # Standalone Lua app ready for SD card sideloading
@@ -20,50 +20,16 @@ Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **st
 ├── test_battleship.lua               # Instruction budget, UI, & state machine test suite
 ├── test_multiplayer.lua              # Full end-to-end 1v1 RF mesh network simulation (Host vs Challenger)
 ├── test_anti_cheat.lua               # Comprehensive 6-point anti-cheat audit verifier test suite
-└── README.md                         # Documentation & store submission guide
+└── README.md                         # Documentation & reference guide
 ```
 
 ---
 
-## WADAMESH Store Submission Checklist
-
-To submit Grid Strike to the official WADAMESH Store catalog (`firmware.wadamesh.com/apps/`):
-
-### 1. Catalog Entry for `deploy/apps/apps.json`
-Add the following entry to the `"apps"` array in `deploy/apps/apps.json`:
-
-```json
-{
-  "id": "battleship",
-  "name": "Grid Strike",
-  "ver": "1.0",
-  "desc": "1v1 naval Battleship combat over LoRa Mesh with lockstep handshakes, commit-reveal anti-cheat audit, and offline AI.",
-  "icon": "game",
-  "requires": "sdk_ext",
-  "seed": false
-}
-```
-
-### 2. Store Review & Safety Compliance
-- **Identity & Cryptographic Security:** The script never reads, logs, persists, or transmits private keys, channel secrets, or contact encryption keys. Node identification is restricted to user-chosen callsigns and public transport routing IDs.
-- **Flash Memory Safety:** State writes to `wada.store` occur strictly upon state transition events (handshake lock-in, firing a shot, validated incoming result, and match completion). Zero writes occur during `on_tick` or reticle cursor movements. Total persistent storage is **304 bytes** (well under the 2,048-byte quota).
-- **Instruction Budget Containment:** Fully compliant with the 100,000 instruction budget cap. Profiling under `debug.sethook` confirms a maximum of **52,000 instructions** per callback during complete radar redraws.
-- **Non-Blocking UI Task:** Built entirely on event-driven callbacks (`wada.timer.every` / `wada.timer.after`). Zero synchronous busy-waits or loops that could stall the mesh radio loop.
-- **32-Bit Arithmetic:** Uses 32-bit unsigned DJB2 hashing compatible with single-precision floating-point and 32-bit integer Lua 5.4 runtimes.
-
----
-
-## Supported Hardware & Responsive Layout
-
-Grid Strike automatically detects the screen dimensions via `app.on_open(w, h)` and scales the radar grid cell size, container origins, and typography:
+## Supported Hardware
 
 | Device | Display Resolution | Layout Mode | Cell Size | Radar Dimensions | Input Support |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **LilyGo T-Deck / T-Deck Plus** | `320 × 240` (Native) | Split Landscape | `14 × 14` px | Two `144 × 144` px panels | Keyboard, Trackball, Touch |
-| **LilyGo T-Deck** (App Body) | `320 × 208` (App Bar) | Compact Landscape | `12 × 12` px | Two `124 × 124` px panels | Keyboard, Trackball, Touch |
-| **LilyGo T-LoRa Pager** | `480 × 222` | Wide Landscape | `12 × 12` px | Two `124 × 124` px panels | Keyboard, Trackball |
-| **ThinkNode M9** | `240 × 320` | Narrow Portrait | `10 × 10` px | Two `104 × 104` px panels | Keyboard / D-Pad |
-| **LilyGo T-Display P4** | `1168 × 474` / `1232 × 502` | Clamped Canvas | `14 × 14` px | Centered Split View | Touchscreen |
+| **LilyGo T-Deck Plus** | `320 × 240` (Native) | Split Landscape | `14 × 14` px | Two `144 × 144` px panels | Physical Keyboard, Trackball, Touchscreen |
 
 ---
 
@@ -164,7 +130,7 @@ Prevents modified clients from lying about hit results or moving ships mid-game:
    /meshcomod/apps/battleship.lua
    /meshcomod/apps/battleship.json
    ```
-2. Insert the card into your T-Deck and open the **Apps** drawer. **Grid Strike** will appear with the game icon.
+2. Insert the card into your T-Deck Plus and open the **Apps** drawer. **Grid Strike** will appear with the game icon.
 
 ### Option 2: USB Serial Sideload
 Using the WADAMESH repository's sideload script:
