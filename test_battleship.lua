@@ -163,27 +163,9 @@ assert(#toasts > 0, "Toast expected on mute toggle")
 guarded(app.on_key, "3")
 print("OK: [3] VS AI lobby option triggered")
 
--- Manual ship placement helper (WASD + Enter)
-local function place_all_ships_manually(target_app)
-  -- Ship 1: CV(5) at (0, 0) H
-  guarded(target_app.on_key, "enter")
-  -- Ship 2: BB(4) at (0, 2) H
-  guarded(target_app.on_key, "s"); guarded(target_app.on_key, "s")
-  guarded(target_app.on_key, "enter")
-  -- Ship 3: CA(3) at (0, 4) H
-  guarded(target_app.on_key, "s"); guarded(target_app.on_key, "s")
-  guarded(target_app.on_key, "enter")
-  -- Ship 4: SS(3) at (0, 6) H
-  guarded(target_app.on_key, "s"); guarded(target_app.on_key, "s")
-  guarded(target_app.on_key, "enter")
-  -- Ship 5: DD(2) at (0, 8) H
-  guarded(target_app.on_key, "s"); guarded(target_app.on_key, "s")
-  guarded(target_app.on_key, "enter")
-end
-
--- Manually place all 5 ships in setup
-place_all_ships_manually(app)
-print("OK: Manual fleet deployment in setup completed")
+-- Auto-place ships in setup
+guarded(app.on_key, "auto")
+print("OK: Auto-placement in setup completed")
 
 -- Confirm fleet & start match
 guarded(app.on_key, "enter")
@@ -260,7 +242,7 @@ _G.wada = mock_wada(320, 240)
 local app_ai = dofile("battleship.lua")
 guarded(app_ai.on_open, 320, 240)
 guarded(app_ai.on_key, "3") -- Select VS AI
-place_all_ships_manually(app_ai) -- Manually place ships
+guarded(app_ai.on_key, "auto") -- Place ships
 guarded(app_ai.on_key, "enter") -- Confirm fleet & start
 
 local function trigger_ai_timers()

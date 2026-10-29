@@ -693,6 +693,28 @@ local function verify_enemy_board(salt, fleet_str)
   return true, "AUDIT PASSED: VERIFIED MATCH", grid
 end
 
+local function get_broadcast_channel()
+  if mesh and mesh.channels then
+    local ok, list = pcall(mesh.channels)
+    if ok and type(list) == "table" and #list > 0 then
+      for _, ch in ipairs(list) do
+        if type(ch) == "string" and ch:lower() == "public" then
+          return ch
+        end
+      end
+      for _, ch in ipairs(list) do
+        if type(ch) == "string" and ch:lower() == "general" then
+          return ch
+        end
+      end
+      if type(list[1]) == "string" and list[1] ~= "" then
+        return list[1]
+      end
+    end
+  end
+  return "Public"
+end
+
 -- ---- Mesh Transmission Wrapper ----------------------------------------------
 local function mesh_send(to, text)
   if not text and type(to) == "table" then
@@ -700,30 +722,55 @@ local function mesh_send(to, text)
     to = to.to
   end
   if not mesh then return false, "no mesh" end
+  local str_text = tostring(text or "")
 
-  local ok, err
   if to and to ~= "" and to ~= "Public" and to ~= "broadcast" then
+    local str_to = tostring(to)
+    -- 1. Try send_dm for direct peer-to-peer transmission
     if mesh.send_dm then
-      ok, err = pcall(mesh.send_dm, to, text)
-      if ok and err ~= false then return true end
+      local ok, res, reason = pcall(mesh.send_dm, str_to, str_text)
+      if ok then
+        if res == true then
+          return true
+        elseif res == false then
+          return false, tostring(reason or "dm failed")
+        else
+          return true
+        end
+      end
     end
+    -- 2. Fallback to mesh.send for test harness or generic routing
     if mesh.send then
-      ok, err = pcall(mesh.send, to, text)
-      if ok and err ~= false then return true end
-      ok, err = pcall(mesh.send, { to = to, text = text })
-      if ok and err ~= false then return true end
+      local ok, res, reason = pcall(mesh.send, str_to, str_text)
+      if ok then
+        if res == true then
+          return true
+        elseif res == false then
+          return false, tostring(reason or "send failed")
+        else
+          return true
+        end
+      end
+      return false, tostring(res)
     end
   else
+    -- Channel broadcast (Lobby discovery & seek beacons)
+    local chan = get_broadcast_channel()
     if mesh.send then
-      ok, err = pcall(mesh.send, "Public", text)
-      if ok and err ~= false then return true end
-      ok, err = pcall(mesh.send, { text = text })
-      if ok and err ~= false then return true end
-      ok, err = pcall(mesh.send, text)
-      if ok and err ~= false then return true end
+      local ok, res, reason = pcall(mesh.send, chan, str_text)
+      if ok then
+        if res == true then
+          return true
+        elseif res == false then
+          return false, tostring(reason or "send failed")
+        else
+          return true
+        end
+      end
+      return false, tostring(res)
     end
   end
-  return false, tostring(err)
+  return false, "no sender"
 end
 
 -- Forward declaration of NetEngine & AI methods
@@ -1113,7 +1160,13 @@ function NetEngine.lock_in_fleet()
       combat_log = string.format("> SEEK [%s]: BROADCASTING BEACON...", match_id)
       if sys.toast then pcall(sys.toast, "Hosting [" .. match_id .. "] - Waiting for peer") end
     else
-      combat_log = string.format("> SEEK [%s] (%s) - [ENT] RETRY", match_id, tostring(sent_err or "WAIT"))
+      if sent_err == "permission requested" then
+        combat_log = string.format("> SEEK [%s]: ALLOW IN SYSTEM POPUP & [ENT] RETRY", match_id)
+      elseif sent_err == "too fast" then
+        combat_log = string.format("> SEEK [%s]: RADIO BUSY. WAIT 5s & [ENT] RETRY", match_id)
+      else
+        combat_log = string.format("> SEEK [%s] (%s) - [ENT] RETRY", match_id, tostring(sent_err or "WAIT"))
+      end
     end
     -- Repeating broadcast timer every 15 seconds (respects WADAMESH 5s gap & dup filter)
     timer_every("seek_broadcast", 15000, function()
@@ -1137,7 +1190,13 @@ function NetEngine.lock_in_fleet()
         combat_log = "> SCANNING MESH FOR HOST LOBBY..."
         if sys.toast then pcall(sys.toast, "Fleet locked! Scanning for Host...") end
       else
-        combat_log = string.format("> SCANNING FOR HOST (%s)...", tostring(sent_err or "WAIT"))
+        if sent_err == "permission requested" then
+          combat_log = "> SCAN: ALLOW IN SYSTEM POPUP & [ENT] RETRY"
+        elseif sent_err == "too fast" then
+          combat_log = "> SCAN: RADIO BUSY. WAIT 5s & [ENT] RETRY"
+        else
+          combat_log = string.format("> SCANNING FOR HOST (%s)...", tostring(sent_err or "WAIT"))
+        end
       end
     end
   end
@@ -1801,7 +1860,7 @@ local function draw_setup_screen()
   elseif setup_ship_idx <= 5 then
     local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
     draw_text(rx + 8, ry + 80, rot_txt, COL_RETICLE, 12)
-    draw_text(rx + 8, ry + 96, "[R] Rotate", COL_TEXT_BRIGHT, 12)
+    draw_text(rx + 8, ry + 96, "[R] Rot  [A] Auto", COL_TEXT_BRIGHT, 12)
   else
     box(btn_x, ry + 77, btn_w, 36, 0x0B2E1C, COL_STATUS_GREEN)
     draw_text_centered(btn_x, ry + 82, btn_w, "FLEET READY!", COL_STATUS_GREEN, 12)
@@ -1816,7 +1875,7 @@ local function draw_setup_screen()
     draw_text(10, bot_y + 20, "[Enter] Re-send   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, 12)
   elseif setup_ship_idx <= 5 then
     draw_text(10, bot_y + 4, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, 12)
-    draw_text(10, bot_y + 20, "[WASD] Aim  [R] Rotate  [Ent] Place", COL_TEXT_BRIGHT, 12)
+    draw_text(10, bot_y + 20, "[WASD] Aim  [R] Rot  [Ent] Place  [A] Auto", COL_TEXT_BRIGHT, 12)
   else
     draw_text(10, bot_y + 4, "FLEET DEPLOYED! READY FOR BATTLE.", COL_STATUS_GREEN, 12)
     draw_text(10, bot_y + 20, "[Enter/Space] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, 12)
@@ -2298,7 +2357,11 @@ function app.on_input(ev)
         app.on_key("enter")
         return
       elseif ty >= home_panel.y + 73 and ty <= home_panel.y + home_panel.h and tx >= home_panel.x and tx <= home_panel.x + home_panel.w then
-        app.on_key("r")
+        if tx >= home_panel.x + math.floor(home_panel.w / 2) then
+          app.on_key("auto")
+        else
+          app.on_key("r")
+        end
         return
       elseif ty >= bot_y then
         app.on_key("enter")

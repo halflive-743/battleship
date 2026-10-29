@@ -97,17 +97,9 @@ _G.wada = node_a.wada
 local app_a = dofile("battleship.lua")
 app_a.on_open(320, 240)
 
-local function place_all_ships(target_app)
-  target_app.on_key("enter")
-  target_app.on_key("s"); target_app.on_key("s"); target_app.on_key("enter")
-  target_app.on_key("s"); target_app.on_key("s"); target_app.on_key("enter")
-  target_app.on_key("s"); target_app.on_key("s"); target_app.on_key("enter")
-  target_app.on_key("s"); target_app.on_key("s"); target_app.on_key("enter")
-end
-
 -- Node A hosts match
 app_a.on_key("1")
-place_all_ships(app_a)
+app_a.on_key("auto")
 app_a.on_key("enter")
 
 -- Check that Node A broadcasted SEEK
@@ -124,7 +116,7 @@ app_b.on_open(320, 240)
 
 -- Node B joins match
 app_b.on_key("2")
-place_all_ships(app_b)
+app_b.on_key("auto")
 -- Node B receives SEEK
 app_b.on_message({ from = "NODE_A_HOST", kind = "channel", text = seek_pkt.text })
 -- Node B confirms setup
