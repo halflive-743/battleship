@@ -236,6 +236,80 @@ end
 assert(timers["fx_shake"] == nil, "Screen-shake timer must cancel after 6 ticks")
 print("OK: Screen-shake completed and cleanly snapped back to origin")
 
--- 8. Clean Exit & Final Verification
-guarded(app_resumed.on_exit)
+-- 8. Test Offline AI Match: Fire Shot -> Zero ACK Wait -> AI Counter-Shot -> Next Turn
+print("=== TESTING OFFLINE AI MATCH (ZERO ACK WAIT) ===")
+_G.wada = mock_wada(320, 240)
+local app_ai = dofile("battleship.lua")
+guarded(app_ai.on_open, 320, 240)
+guarded(app_ai.on_key, "3") -- Select VS AI
+guarded(app_ai.on_key, "auto") -- Place ships
+guarded(app_ai.on_key, "enter") -- Confirm fleet & start
+
+local function trigger_ai_timers()
+  local list = {}
+  for name, t in pairs(timers) do
+    if name:find("after_") and t.cb then
+      list[#list + 1] = t.cb
+    end
+  end
+  for _, cb in ipairs(list) do
+    guarded(cb)
+  end
+end
+
+-- If AI won coin toss and fires first, let it take its turn
+local current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+if current_st == "STATE_ENEMY_TURN" then
+  print("AI won toss: waiting for AI counter-shot...")
+  trigger_ai_timers()
+end
+
+-- Verify it is now player's turn
+current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+assert(current_st == "STATE_MY_TURN", "Expected player's turn")
+
+-- Player fires first shot at target radar
+last_sent_mesh = nil
+guarded(app_ai.on_key, "enter")
+
+-- Confirm NO mesh packet sent and state is STATE_ENEMY_TURN immediately without ACK WAIT!
+assert(last_sent_mesh == nil, "Offline AI match must not send packets over LoRa mesh")
+current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+assert(current_st == "STATE_ENEMY_TURN", "State must advance to STATE_ENEMY_TURN immediately")
+print("OK: Player shot fired against AI with zero ACK wait! State -> STATE_ENEMY_TURN")
+
+-- AI fires back
+trigger_ai_timers()
+current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+assert(current_st == "STATE_MY_TURN", "State must return to STATE_MY_TURN after AI shot")
+print("OK: AI counter-shot executed cleanly! State -> STATE_MY_TURN")
+
+-- Player aims and fires second shot
+guarded(app_ai.on_key, "d")
+last_sent_mesh = nil
+guarded(app_ai.on_key, "enter")
+assert(last_sent_mesh == nil, "No packets sent over mesh on second shot")
+current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+assert(current_st == "STATE_ENEMY_TURN", "Second shot fired cleanly with zero ACK wait")
+trigger_ai_timers()
+current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+assert(current_st == "STATE_MY_TURN", "Turn 2 completed smoothly without ACK lock")
+print("OK: Consecutive player & AI turns completed with zero ACK wait!")
+
+-- Test Heartbeat on_tick Fallback
+guarded(app_ai.on_key, "s") -- Move aim to (1, 1)
+last_sent_mesh = nil
+guarded(app_ai.on_key, "enter") -- Player fires
+current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+assert(current_st == "STATE_ENEMY_TURN", "State is STATE_ENEMY_TURN")
+-- Simulate timers not running, but on_tick called after 1000ms
+local fake_now = (os.clock() * 1000) + 1500
+_G.wada.sys.millis = function() return fake_now end
+guarded(app_ai.on_tick, 50)
+current_st = storekv["active_match"]:match("^%w+|[^|]+|([^|]+)")
+assert(current_st == "STATE_MY_TURN", "on_tick heartbeat must execute AI turn if timer delayed")
+print("OK: on_tick heartbeat fallback successfully triggered AI shot!")
+
+-- 9. Clean Exit & Final Verification
+guarded(app_ai.on_exit)
 print(string.format("ALL TESTS PASSED! Max instructions in any callback: %d (< 100000 limit)", max_instructions))

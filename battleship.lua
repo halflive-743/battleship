@@ -1335,9 +1335,7 @@ function NetEngine.process_packet(sender, text)
     local res_payload = string.format("BS|RES|%s|%d|%d,%d|%s|%d", match_id, local_seq, x, y, status, ship_id)
     last_sent_res = { seq = local_seq, payload = res_payload }
 
-    if is_ai_match then
-      ai_engine.deliver_loopback(res_payload, 400)
-    else
+    if not is_ai_match then
       mesh_send(opponent_id, res_payload)
     end
 
@@ -1556,13 +1554,15 @@ local function draw_top_bar()
   -- Lockstep telemetry & retry counter (Center-Right)
   local telem_text = ""
   if local_seq > 0 then
-    if tx_pending and tx_pending.retries > 0 then
+    if is_ai_match then
+      telem_text = string.format("TURN:%02d | VS CPU", local_seq)
+    elseif tx_pending and tx_pending.retries > 0 then
       telem_text = string.format("SEQ:%02d | RETRY:%d/5", local_seq, tx_pending.retries)
     else
       telem_text = string.format("SEQ:%02d | ACK:OK", local_seq)
     end
   elseif game_state == STATE_SETUP and match_id ~= "" then
-    telem_text = string.format("ID:%s", match_id)
+    telem_text = is_ai_match and "VS CPU" or string.format("ID:%s", match_id)
   end
   draw_text(118, 3, telem_text, COL_TEXT_DIM, 12)
 
@@ -1999,10 +1999,18 @@ function app.on_key(key)
         end
 
         combat_log = string.format("> MATCH RESUMED [ID:%s | SEQ:%02d]", match_id, local_seq)
-        if recovered.tx_pending_payload then
-          NetEngine.queue_tx(recovered.tx_pending_payload, local_seq)
-        elseif game_state == STATE_ENEMY_TURN then
-          mesh_send(opponent_id, string.format("BS|SYNC|%s|%d", match_id, local_seq))
+        is_ai_match = (recovered.opponent_id == "AI_BOT")
+        if is_ai_match then
+          tx_pending = nil
+          if game_state == STATE_ENEMY_TURN then
+            NetEngine.trigger_ai_turn()
+          end
+        else
+          if recovered.tx_pending_payload then
+            NetEngine.queue_tx(recovered.tx_pending_payload, local_seq)
+          elseif game_state == STATE_ENEMY_TURN then
+            mesh_send(opponent_id, string.format("BS|SYNC|%s|%d", match_id, local_seq))
+          end
         end
       else
         game_state = STATE_LOBBY
@@ -2334,8 +2342,13 @@ end
 
 -- System Heartbeat Tick
 function app.on_tick(dt)
-  -- Timers are primarily driven via timer_every callbacks,
-  -- but fallback heartbeat logic can reside here if needed.
+  if is_ai_match and game_state == STATE_ENEMY_TURN and ai_turn_scheduled_ms > 0 then
+    local now = (sys.millis and sys.millis()) or 0
+    if now > 0 and now >= ai_turn_scheduled_ms then
+      ai_turn_scheduled_ms = 0
+      NetEngine.execute_ai_shot()
+    end
+  end
 end
 
 -- App Initialization Hook
