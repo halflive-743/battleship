@@ -825,10 +825,80 @@ function ai_engine.pick_shot()
   return nil
 end
 
-function ai_engine.deliver_loopback(msg_text, delay_ms)
-  timer_after(delay_ms or 400, function()
-    if app.on_message then
-      app.on_message({ from = "AI_BOT", kind = "dm", text = msg_text })
+local ai_turn_scheduled_ms = 0
+
+-- Execute AI's shot against the player's home fleet (my_board)
+function NetEngine.execute_ai_shot()
+  if not is_ai_match or game_state ~= STATE_ENEMY_TURN then return end
+
+  local shot = ai_engine.pick_shot()
+  if not shot then return end
+  ai_engine.ai_shots[shot.y][shot.x] = true
+
+  local x, y = shot.x, shot.y
+  local target_sid = my_board[y] and my_board[y][x] or 0
+
+  if target_sid == 0 then
+    enemy_shots[y][x] = "M"
+    career_stats.misses = career_stats.misses + 1
+    sfx_play("MISS")
+    combat_log = string.format("> ENEMY FIRED AT %s: SPLASH! MISS.", format_coord(x, y))
+  else
+    enemy_shots[y][x] = "H"
+    my_ship_hits[target_sid] = (my_ship_hits[target_sid] or 0) + 1
+    career_stats.hits = career_stats.hits + 1
+
+    if my_ship_hits[target_sid] >= SHIP_SPECS[target_sid].len then
+      my_sunk_count = my_sunk_count + 1
+      enemy_shots[y][x] = tostring(target_sid)
+      sfx_play("SUNK")
+      trigger_shake("home", true)
+      ai_engine.active_hits[#ai_engine.active_hits + 1] = { x = x, y = y, id = target_sid }
+      local remain = {}
+      for _, h in ipairs(ai_engine.active_hits) do
+        if h.id ~= target_sid then remain[#remain + 1] = h end
+      end
+      ai_engine.active_hits = remain
+
+      if my_sunk_count >= 5 then
+        combat_log = string.format("> ENEMY SUNK YOUR %s! FLEET LOST!", SHIP_SPECS[target_sid].abbr)
+        ghost_grid = ai_engine.ai_board
+        audit_passed = true
+        audit_status_msg = "[DEFEAT: YOUR FLEET WAS SUNK]"
+        career_stats.losses = career_stats.losses + 1
+        career_stats.matches = career_stats.matches + 1
+        save_career_stats()
+        game_state = STATE_GAME_OVER
+        clear_match_state()
+        if draw_screen then draw_screen() end
+        return
+      else
+        combat_log = string.format("> ENEMY SUNK YOUR %s!", SHIP_SPECS[target_sid].name)
+      end
+    else
+      sfx_play("HIT")
+      trigger_shake("home", false)
+      combat_log = string.format("> ENEMY HIT YOUR SHIP AT %s!", format_coord(x, y))
+      ai_engine.active_hits[#ai_engine.active_hits + 1] = { x = x, y = y, id = 0 }
+    end
+  end
+
+  local_seq = local_seq + 1
+  game_state = STATE_MY_TURN
+  save_match_state()
+  if draw_screen then draw_screen() end
+end
+
+-- Trigger AI firing turn (600ms tactical pacing)
+function NetEngine.trigger_ai_turn()
+  if not is_ai_match or game_state ~= STATE_ENEMY_TURN then return end
+  local now = (sys.millis and sys.millis()) or 0
+  ai_turn_scheduled_ms = now + 600
+
+  timer_after(600, function()
+    if is_ai_match and game_state == STATE_ENEMY_TURN and ai_turn_scheduled_ms > 0 then
+      ai_turn_scheduled_ms = 0
+      NetEngine.execute_ai_shot()
     end
   end)
 end
@@ -852,11 +922,7 @@ function NetEngine.start_retry_timer()
       else
         tx_pending.next_wait = 6000 + (tx_pending.retries * 2000)
         combat_log = string.format("> TX RETRY %d/5 [Seq %d]...", tx_pending.retries, tx_pending.seq)
-        if is_ai_match then
-          ai_engine.deliver_loopback(tx_pending.payload, 400)
-        else
-          mesh_send(opponent_id, tx_pending.payload)
-        end
+        mesh_send(opponent_id, tx_pending.payload)
         if draw_screen then draw_screen() end
       end
     end
@@ -873,12 +939,8 @@ function NetEngine.queue_tx(payload, seq)
   }
   show_retry_modal = false
 
-  if is_ai_match then
-    ai_engine.deliver_loopback(payload, 400)
-  else
-    mesh_send(opponent_id, payload)
-    NetEngine.start_retry_timer()
-  end
+  mesh_send(opponent_id, payload)
+  NetEngine.start_retry_timer()
   save_match_state()
 end
 
@@ -891,10 +953,62 @@ end
 -- Fire at (x, y) on enemy sector
 function NetEngine.fire_shot(x, y)
   if game_state ~= STATE_MY_TURN then return end
-  if tx_pending ~= nil then return end
+  if not is_ai_match and tx_pending ~= nil then return end
   if my_shots[y][x] ~= "0" then return end
 
   sfx_play("FIRE")
+
+  if is_ai_match then
+    -- Offline AI match: evaluate shot immediately without network packets or ACK wait!
+    local target_sid = ai_engine.ai_board[y] and ai_engine.ai_board[y][x] or 0
+    if target_sid == 0 then
+      my_shots[y][x] = "M"
+      career_stats.misses = career_stats.misses + 1
+      sfx_play("MISS")
+      combat_log = string.format("> SHOT AT %s: SPLASH! MISS.", format_coord(x, y))
+    else
+      ai_engine.ship_hits[target_sid] = (ai_engine.ship_hits[target_sid] or 0) + 1
+      career_stats.hits = career_stats.hits + 1
+
+      if ai_engine.ship_hits[target_sid] >= SHIP_SPECS[target_sid].len then
+        ai_engine.sunk_count = ai_engine.sunk_count + 1
+        my_shots[y][x] = tostring(target_sid)
+        sfx_play("SUNK")
+        trigger_shake("target", true)
+        local sname = SHIP_SPECS[target_sid] and SHIP_SPECS[target_sid].name or "WARSHIP"
+        if ai_engine.sunk_count >= 5 then
+          combat_log = string.format("> VICTORY! ENEMY %s SUNK!", sname)
+          ghost_grid = ai_engine.ai_board
+          audit_passed = true
+          audit_status_msg = "[VICTORY: ALL ENEMY SHIPS SUNK]"
+          career_stats.wins = career_stats.wins + 1
+          career_stats.matches = career_stats.matches + 1
+          save_career_stats()
+          game_state = STATE_GAME_OVER
+          clear_match_state()
+          if draw_screen then draw_screen() end
+          return
+        else
+          combat_log = string.format("> ENEMY %s SUNK!", sname)
+        end
+      else
+        my_shots[y][x] = "H"
+        sfx_play("HIT")
+        trigger_shake("target", false)
+        combat_log = string.format("> SHOT AT %s: DIRECT HIT!", format_coord(x, y))
+      end
+    end
+
+    local_seq = local_seq + 1
+    game_state = STATE_ENEMY_TURN
+    save_match_state()
+    if draw_screen then draw_screen() end
+
+    NetEngine.trigger_ai_turn()
+    return
+  end
+
+  -- Multiplayer LoRa match: queue over mesh and wait for peer ACK/RES
   local payload = string.format("BS|FIRE|%s|%d|%d,%d", match_id, local_seq, x, y)
   combat_log = string.format("> TX FIRE %s [Seq %d]...", format_coord(x, y), local_seq)
   NetEngine.queue_tx(payload, local_seq)
@@ -1028,20 +1142,6 @@ function NetEngine.lock_in_fleet()
     end
   end
   if draw_screen then draw_screen() end
-end
-
--- Simulated AI firing turn
-function NetEngine.trigger_ai_turn()
-  if not is_ai_match or game_state ~= STATE_ENEMY_TURN then return end
-
-  timer_after(600, function()
-    if game_state ~= STATE_ENEMY_TURN then return end
-    local shot = ai_engine.pick_shot()
-    if not shot then return end
-    ai_engine.ai_shots[shot.y][shot.x] = true
-    local payload = string.format("BS|FIRE|%s|%d|%d,%d", match_id, local_seq, shot.x, shot.y)
-    app.on_message({ from = "AI_BOT", kind = "dm", text = payload })
-  end)
 end
 
 -- Process incoming LoRa packet
