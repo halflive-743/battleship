@@ -1860,7 +1860,7 @@ local function draw_setup_screen()
   elseif setup_ship_idx <= 5 then
     local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
     draw_text(rx + 8, ry + 80, rot_txt, COL_RETICLE, 12)
-    draw_text(rx + 8, ry + 96, "[R] Rot  [A] Auto", COL_TEXT_BRIGHT, 12)
+    draw_text(rx + 8, ry + 96, "[R] Rotate", COL_TEXT_BRIGHT, 12)
   else
     box(btn_x, ry + 77, btn_w, 36, 0x0B2E1C, COL_STATUS_GREEN)
     draw_text_centered(btn_x, ry + 82, btn_w, "FLEET READY!", COL_STATUS_GREEN, 12)
@@ -1875,7 +1875,7 @@ local function draw_setup_screen()
     draw_text(10, bot_y + 20, "[Enter] Re-send   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, 12)
   elseif setup_ship_idx <= 5 then
     draw_text(10, bot_y + 4, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, 12)
-    draw_text(10, bot_y + 20, "[WASD] Aim  [R] Rot  [Ent] Place  [A] Auto", COL_TEXT_BRIGHT, 12)
+    draw_text(10, bot_y + 20, "[WASD] Aim  [R] Rotate  [Ent] Place", COL_TEXT_BRIGHT, 12)
   else
     draw_text(10, bot_y + 4, "FLEET DEPLOYED! READY FOR BATTLE.", COL_STATUS_GREEN, 12)
     draw_text(10, bot_y + 20, "[Enter/Space] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, 12)
@@ -2357,11 +2357,7 @@ function app.on_input(ev)
         app.on_key("enter")
         return
       elseif ty >= home_panel.y + 73 and ty <= home_panel.y + home_panel.h and tx >= home_panel.x and tx <= home_panel.x + home_panel.w then
-        if tx >= home_panel.x + math.floor(home_panel.w / 2) then
-          app.on_key("auto")
-        else
-          app.on_key("r")
-        end
+        app.on_key("r")
         return
       elseif ty >= bot_y then
         app.on_key("enter")
