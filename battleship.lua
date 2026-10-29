@@ -1505,6 +1505,15 @@ local function draw_text(x, y, str, col, sz)
   cv:text(I(x), I(y), s, col or COL_TEXT_BRIGHT, sz or 12)
 end
 
+local function draw_text_centered(bx, by, bw, str, col, sz)
+  if not cv or not str or str == "" then return end
+  local s = tostring(str)
+  local char_w = (sz and sz > 12) and 8.5 or 7.5
+  local tw = math.floor(#s * char_w)
+  local tx = bx + math.max(2, math.floor((bw - tw) / 2))
+  draw_text(tx, by, s, col, sz)
+end
+
 local function draw_line(x1, y1, x2, y2, col, width)
   if not cv then return end
   cv:line(I(x1), I(y1), I(x2), I(y2), col, width or 1)
@@ -1782,18 +1791,21 @@ local function draw_setup_screen()
   -- Clean divider line below 5.DD(2) without overlapping
   draw_line(rx + 4, ry + 73, rx + rw - 4, ry + 73, COL_GRID_LINE, 1)
 
+  local btn_x = rx + 4
+  local btn_w = rw - 8
+
   if fleet_locked then
-    box(rx + 4, ry + 77, rw - 8, 36, COL_BAR_BG, COL_STATUS_AMBER)
-    draw_text(rx + 8, ry + 82, is_host and "WAITING PEER" or "SCANNING...", COL_STATUS_AMBER, 12)
-    draw_text(rx + 14, ry + 97, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
+    box(btn_x, ry + 77, btn_w, 36, COL_BAR_BG, COL_STATUS_AMBER)
+    draw_text_centered(btn_x, ry + 82, btn_w, is_host and "WAITING PEER" or "SCANNING...", COL_STATUS_AMBER, 12)
+    draw_text_centered(btn_x, ry + 97, btn_w, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
   elseif setup_ship_idx <= 5 then
     local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
     draw_text(rx + 8, ry + 80, rot_txt, COL_RETICLE, 12)
     draw_text(rx + 8, ry + 96, "[R] Rot  [A] Auto", COL_TEXT_BRIGHT, 12)
   else
-    box(rx + 4, ry + 77, rw - 8, 36, 0x0B2E1C, COL_STATUS_GREEN)
-    draw_text(rx + 16, ry + 82, "FLEET READY!", COL_STATUS_GREEN, 12)
-    draw_text(rx + 10, ry + 97, "[CONFIRM & PLAY]", COL_TEXT_BRIGHT, 12)
+    box(btn_x, ry + 77, btn_w, 36, 0x0B2E1C, COL_STATUS_GREEN)
+    draw_text_centered(btn_x, ry + 82, btn_w, "FLEET READY!", COL_STATUS_GREEN, 12)
+    draw_text_centered(btn_x, ry + 97, btn_w, "[CONFIRM]", COL_TEXT_BRIGHT, 12)
   end
 
   -- Bottom Bar
