@@ -277,6 +277,7 @@ end
 
 local function split_pipe(str)
   local t = {}
+  if type(str) ~= "string" or str == "" then return t end
   for part in (str .. "|"):gmatch("(.-)|") do
     t[#t + 1] = part
   end
@@ -432,6 +433,8 @@ local setup_ship_idx    = 1
 local setup_cur_x       = 0
 local setup_cur_y       = 0
 local setup_dir         = "H"
+local fleet_locked      = false
+local seek_beacon_seq   = 0
 
 -- Combat targeting cursor
 local target_cur_x      = 0
@@ -459,8 +462,10 @@ local career_stats = {
 -- ---- Career Stats Storage ---------------------------------------------------
 local function load_career_stats()
   if not store.get then return end
-  local str = store.get("career_stats")
-  if str and str ~= "" then
+  -- Always pass default "" as 2nd arg: LuaAppHost.cpp storeGet returns the
+  -- internal wada.storetab registry table if called with only 1 argument when key is nil.
+  local str = store.get("career_stats", "")
+  if type(str) == "string" and str ~= "" then
     local p = split_pipe(str)
     if #p >= 5 then
       career_stats.wins    = I(p[1])
@@ -484,6 +489,9 @@ end
 local function clear_match_state()
   if store.set then
     store.set("active_match", "")
+    store.set("am_my", "")
+    store.set("am_en", "")
+    store.set("am_tx", "")
   end
 end
 
@@ -497,7 +505,9 @@ local function save_match_state()
   local tx_str = tx_pending and tx_pending.payload or ""
   local res_str = last_sent_res and last_sent_res.payload or ""
 
-  local packed = string.format("%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s|%s",
+  -- Split across compact keys so each key=value\n stays well under
+  -- LuaAppHost.cpp's 192-byte line buffer in storeFlush/storeLoad.
+  local packed = string.format("%s|%s|%s|%d|%s|%s|%s|%s",
     match_id,
     opponent_id,
     game_state,
@@ -505,38 +515,59 @@ local function save_match_state()
     my_salt,
     my_board_hash,
     enemy_board_hash,
-    my_fleet_str,
-    pack_grid_100(my_shots),
-    pack_grid_100(enemy_shots),
-    escape_pipes(tx_str),
-    escape_pipes(res_str)
+    my_fleet_str
   )
 
   store.set("active_match", packed)
+  store.set("am_my", "G:" .. pack_grid_100(my_shots))
+  store.set("am_en", "G:" .. pack_grid_100(enemy_shots))
+  store.set("am_tx", string.format("%s|%s", escape_pipes(tx_str), escape_pipes(res_str)))
 end
 
 local function load_active_match()
   if not store.get then return nil end
-  local packed = store.get("active_match")
-  if not packed or packed == "" then return nil end
+  local packed = store.get("active_match", "")
+  if type(packed) ~= "string" or packed == "" then return nil end
 
   local p = split_pipe(packed)
-  if #p < 12 then return nil end
-
-  return {
-    match_id           = p[1],
-    opponent_id        = p[2],
-    game_state         = p[3],
-    local_seq          = I(p[4]),
-    my_salt            = p[5],
-    my_board_hash      = p[6],
-    enemy_board_hash   = p[7],
-    my_fleet_str       = p[8],
-    my_shots_100       = p[9],
-    enemy_shots_100    = p[10],
-    tx_pending_payload = unescape_pipes(p[11]),
-    last_res_payload   = unescape_pipes(p[12]),
-  }
+  if #p >= 12 then
+    return {
+      match_id           = p[1],
+      opponent_id        = p[2],
+      game_state         = p[3],
+      local_seq          = I(p[4]),
+      my_salt            = p[5],
+      my_board_hash      = p[6],
+      enemy_board_hash   = p[7],
+      my_fleet_str       = p[8],
+      my_shots_100       = p[9],
+      enemy_shots_100    = p[10],
+      tx_pending_payload = unescape_pipes(p[11]),
+      last_res_payload   = unescape_pipes(p[12]),
+    }
+  elseif #p >= 8 then
+    local my_s = store.get("am_my", "")
+    local en_s = store.get("am_en", "")
+    local tx_s = store.get("am_tx", "")
+    if type(my_s) == "string" and my_s:sub(1, 2) == "G:" then my_s = my_s:sub(3) else my_s = tostring(my_s or "") end
+    if type(en_s) == "string" and en_s:sub(1, 2) == "G:" then en_s = en_s:sub(3) else en_s = tostring(en_s or "") end
+    local tp = type(tx_s) == "string" and split_pipe(tx_s) or {}
+    return {
+      match_id           = p[1],
+      opponent_id        = p[2],
+      game_state         = p[3],
+      local_seq          = I(p[4]),
+      my_salt            = p[5],
+      my_board_hash      = p[6],
+      enemy_board_hash   = p[7],
+      my_fleet_str       = p[8],
+      my_shots_100       = my_s,
+      enemy_shots_100    = en_s,
+      tx_pending_payload = unescape_pipes(tp[1]),
+      last_res_payload   = unescape_pipes(tp[2]),
+    }
+  end
+  return nil
 end
 
 -- ---- Board & Grid Initialization --------------------------------------------
@@ -672,21 +703,21 @@ local function mesh_send(to, text)
 
   local ok, err
   if to and to ~= "" and to ~= "Public" and to ~= "broadcast" then
-    if mesh.send then
-      ok, err = pcall(mesh.send, { to = to, text = text })
-      if ok and err ~= false then return true end
-      ok, err = pcall(mesh.send, to, text)
-      if ok and err ~= false then return true end
-    end
     if mesh.send_dm then
       ok, err = pcall(mesh.send_dm, to, text)
       if ok and err ~= false then return true end
     end
+    if mesh.send then
+      ok, err = pcall(mesh.send, to, text)
+      if ok and err ~= false then return true end
+      ok, err = pcall(mesh.send, { to = to, text = text })
+      if ok and err ~= false then return true end
+    end
   else
     if mesh.send then
-      ok, err = pcall(mesh.send, { text = text })
-      if ok and err ~= false then return true end
       ok, err = pcall(mesh.send, "Public", text)
+      if ok and err ~= false then return true end
+      ok, err = pcall(mesh.send, { text = text })
       if ok and err ~= false then return true end
       ok, err = pcall(mesh.send, text)
       if ok and err ~= false then return true end
@@ -873,6 +904,9 @@ end
 -- Host initiates a new match lobby
 function NetEngine.host_lobby()
   init_empty_grids()
+  my_ships = {}
+  my_board_hash = ""
+  fleet_locked = false
   match_id = rand_match_id()
   is_host = true
   is_ai_match = false
@@ -880,6 +914,8 @@ function NetEngine.host_lobby()
   enemy_callsign = "WAITING"
   local_seq = 0
   setup_ship_idx = 1
+  setup_cur_x = 0
+  setup_cur_y = 0
   game_state = STATE_SETUP
   combat_log = string.format("> HOSTING MATCH [%s]. PLACE YOUR FLEET.", match_id)
   if draw_screen then draw_screen() end
@@ -888,10 +924,17 @@ end
 -- Challenger seeks a match
 function NetEngine.join_lobby()
   init_empty_grids()
+  my_ships = {}
+  my_board_hash = ""
+  fleet_locked = false
+  match_id = ""
+  opponent_id = ""
   is_host = false
   is_ai_match = false
   local_seq = 0
   setup_ship_idx = 1
+  setup_cur_x = 0
+  setup_cur_y = 0
   game_state = STATE_SETUP
   combat_log = "> ENTERING FLEET SETUP BEFORE SEEKING HOST..."
   if draw_screen then draw_screen() end
@@ -900,6 +943,9 @@ end
 -- Start offline match against Hunt/Target AI
 function NetEngine.start_vs_ai()
   init_empty_grids()
+  my_ships = {}
+  my_board_hash = ""
+  fleet_locked = false
   match_id = rand_match_id()
   is_host = true
   is_ai_match = true
@@ -907,6 +953,8 @@ function NetEngine.start_vs_ai()
   enemy_callsign = "CPU_STRIKER"
   local_seq = 0
   setup_ship_idx = 1
+  setup_cur_x = 0
+  setup_cur_y = 0
   game_state = STATE_SETUP
   ai_engine.init()
   enemy_board_hash = ai_engine.ai_board_hash
@@ -916,10 +964,13 @@ end
 
 -- Finalize ship setup and start matchmaking handshake
 function NetEngine.lock_in_fleet()
-  my_fleet_str = serialize_fleet(my_ships)
-  my_salt = rand_salt()
-  my_board_hash = djb2_hex(my_fleet_str .. "|" .. my_salt)
-  handshake_seed = rand_int(1, 999999)
+  if not fleet_locked or my_board_hash == "" then
+    my_fleet_str = serialize_fleet(my_ships)
+    my_salt = rand_salt()
+    my_board_hash = djb2_hex(my_fleet_str .. "|" .. my_salt)
+    handshake_seed = rand_int(1, 999999)
+  end
+  fleet_locked = true
 
   if is_ai_match then
     enemy_seed = rand_int(1, 999999)
@@ -939,24 +990,41 @@ function NetEngine.lock_in_fleet()
     return
   end
 
+  sfx_play("TURN_ALERT")
   if is_host then
-    combat_log = string.format("> FLEET LOCKED. BROADCASTING SEEK [%s]...", match_id)
-    mesh_send("Public", string.format("BS|SEEK|%s|%s", match_id, my_callsign))
-    -- Repeating broadcast timer every 4 seconds
-    timer_every("seek_broadcast", 4000, function()
+    seek_beacon_seq = seek_beacon_seq + 1
+    local seek_pkt = string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq)
+    local sent_ok, sent_err = mesh_send("Public", seek_pkt)
+    if sent_ok then
+      combat_log = string.format("> FLEET LOCKED! BROADCASTING SEEK [%s]...", match_id)
+      if sys.toast then pcall(sys.toast, "Hosting [" .. match_id .. "] - Waiting for peer") end
+    else
+      combat_log = string.format("> SEEK [%s] (%s) - [ENT] RETRY", match_id, tostring(sent_err or "WAIT"))
+    end
+    -- Repeating broadcast timer every 15 seconds (respects WADAMESH 5s gap & dup filter)
+    timer_every("seek_broadcast", 15000, function()
       if game_state == STATE_SETUP and is_host and opponent_id == "" then
-        mesh_send("Public", string.format("BS|SEEK|%s|%s", match_id, my_callsign))
+        seek_beacon_seq = seek_beacon_seq + 1
+        mesh_send("Public", string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq))
       else
         timer_cancel("seek_broadcast")
       end
     end)
   else
-    combat_log = "> FLEET LOCKED. SCANNING FOR LOBBIES / TRANSMITTING JOIN..."
     if opponent_id ~= "" and match_id ~= "" then
+      combat_log = string.format("> FLEET LOCKED! JOINING HOST [%s] (%s)...", match_id, enemy_callsign)
+      if sys.toast then pcall(sys.toast, "Joining Host [" .. match_id .. "]...") end
       local payload = string.format("BS|JOIN|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
       NetEngine.queue_tx(payload, 0)
     else
-      mesh_send("Public", string.format("BS|JOIN_SEEK|0|%d|%s", handshake_seed, my_board_hash))
+      seek_beacon_seq = seek_beacon_seq + 1
+      local sent_ok, sent_err = mesh_send("Public", string.format("BS|JOIN_SEEK|0|%d|%s|%d", handshake_seed, my_board_hash, seek_beacon_seq))
+      if sent_ok then
+        combat_log = "> FLEET LOCKED! SCANNING FOR HOST LOBBY..."
+        if sys.toast then pcall(sys.toast, "Fleet locked! Scanning for Host...") end
+      else
+        combat_log = string.format("> SCANNING FOR HOST (%s)...", tostring(sent_err or "WAIT"))
+      end
     end
   end
   if draw_screen then draw_screen() end
@@ -996,6 +1064,21 @@ function NetEngine.process_packet(sender, text)
         local payload = string.format("BS|JOIN|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
         NetEngine.queue_tx(payload, 0)
       end
+      if draw_screen then draw_screen() end
+    end
+    return
+  end
+
+  if ptype == "JOIN_SEEK" then
+    if is_host and game_state == STATE_SETUP and opponent_id == "" and match_id ~= "" then
+      seek_beacon_seq = seek_beacon_seq + 1
+      local seek_pkt = string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq)
+      if sender and sender ~= "" then
+        mesh_send(sender, seek_pkt)
+      else
+        mesh_send("Public", seek_pkt)
+      end
+      combat_log = string.format("> PEER DETECTED (%s). SENT SEEK [%s]...", tostring(sender or "PEER"), match_id)
       if draw_screen then draw_screen() end
     end
     return
@@ -1345,8 +1428,13 @@ local function draw_top_bar()
     state_text = "[ENEMY TURN]"
     state_col  = COL_STATUS_CYAN
   elseif game_state == STATE_SETUP then
-    state_text = "[FLEET SETUP]"
-    state_col  = COL_STATUS_GREEN
+    if fleet_locked then
+      state_text = is_host and "[HOSTING...]" or "[SEEKING...]"
+      state_col  = COL_STATUS_AMBER
+    else
+      state_text = "[FLEET SETUP]"
+      state_col  = COL_STATUS_GREEN
+    end
   elseif game_state == STATE_AUDIT then
     state_text = "[AUDITING]"
     state_col  = COL_GHOST
@@ -1367,6 +1455,8 @@ local function draw_top_bar()
     else
       telem_text = string.format("SEQ:%02d | ACK:OK", local_seq)
     end
+  elseif game_state == STATE_SETUP and match_id ~= "" then
+    telem_text = string.format("ID:%s", match_id)
   end
   draw_text(130, 6, telem_text, COL_TEXT_DIM, 12)
 
@@ -1582,18 +1672,31 @@ local function draw_setup_screen()
   end
 
   draw_line(rx + 4, ry + rw - 36, rx + rw - 4, ry + rw - 36, COL_GRID_LINE, 1)
-  local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
-  draw_text(rx + 6, ry + rw - 30, rot_txt, COL_RETICLE, 12)
-  draw_text(rx + 6, ry + rw - 16, "[R] Rotate [A] Auto", COL_TEXT_BRIGHT, 12)
+  if fleet_locked then
+    box(rx + 4, ry + rw - 32, rw - 8, 28, COL_BAR_BG, COL_STATUS_AMBER)
+    draw_text(rx + 10, ry + rw - 29, is_host and "WAITING FOR PEER" or "SCANNING MESH...", COL_STATUS_AMBER, 12)
+    draw_text(rx + 10, ry + rw - 16, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
+  elseif setup_ship_idx <= 5 then
+    local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
+    draw_text(rx + 6, ry + rw - 30, rot_txt, COL_RETICLE, 12)
+    draw_text(rx + 6, ry + rw - 16, "[R] Rot  [A] Auto", COL_TEXT_BRIGHT, 12)
+  else
+    box(rx + 4, ry + rw - 32, rw - 8, 28, 0x0B2E1C, COL_STATUS_GREEN)
+    draw_text(rx + 8, ry + rw - 29, "FLEET READY!", COL_STATUS_GREEN, 12)
+    draw_text(rx + 8, ry + rw - 16, "[CONFIRM & BATTLE]", COL_TEXT_BRIGHT, 12)
+  end
 
   -- Bottom Bar
   box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
-  if setup_ship_idx <= 5 then
+  if fleet_locked then
+    draw_text(10, bot_y + 6, combat_log, COL_STATUS_AMBER, 12)
+    draw_text(10, bot_y + 24, "[Enter/Tap] Re-send Beacon   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, 12)
+  elseif setup_ship_idx <= 5 then
     draw_text(10, bot_y + 6, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, 12)
     draw_text(10, bot_y + 24, "[WASD] Aim  [R] Rotate  [Ent] Place  [A] Auto", COL_TEXT_BRIGHT, 12)
   else
     draw_text(10, bot_y + 6, "ALL 5 SHIPS DEPLOYED! READY TO LOCK IN FLEET.", COL_STATUS_GREEN, 12)
-    draw_text(10, bot_y + 24, "[Enter/Space] CONFIRM & BATTLE  [C] Reset", COL_TEXT_BRIGHT, 12)
+    draw_text(10, bot_y + 24, "[Enter/Space/Tap] CONFIRM & BATTLE   [C] Reset", COL_TEXT_BRIGHT, 12)
   end
 end
 
@@ -1739,7 +1842,15 @@ end
 
 -- Keyboard & Trackball Input Handler
 function app.on_key(key)
-  local k = tostring(key or ""):lower()
+  local raw_key = tostring(key or "")
+  local k = raw_key:lower()
+  if raw_key == " " then
+    k = "space"
+  elseif raw_key == "\r" or raw_key == "\n" then
+    k = "enter"
+  elseif k == "esc" or k == "backspace" then
+    k = "escape"
+  end
 
   -- Global Sound Mute Toggle
   if k == "m" then
@@ -1831,26 +1942,52 @@ function app.on_key(key)
 
   -- 4. Fleet Placement Setup Inputs
   if game_state == STATE_SETUP then
+    if fleet_locked then
+      if k == "enter" or k == "space" then
+        NetEngine.lock_in_fleet()
+      elseif k == "c" then
+        fleet_locked = false
+        timer_cancel("seek_broadcast")
+        NetEngine.clear_tx()
+        combat_log = "> FLEET UNLOCKED. PRESS [ENTER] TO CONFIRM OR [C] TO RESET."
+      elseif k == "q" or k == "escape" then
+        fleet_locked = false
+        timer_cancel("seek_broadcast")
+        NetEngine.clear_tx()
+        game_state = STATE_LOBBY
+      end
+      draw_screen()
+      return
+    end
+
     if k == "w" or k == "up" then
       setup_cur_y = clamp(setup_cur_y - 1, 0, 9)
     elseif k == "s" or k == "down" then
       setup_cur_y = clamp(setup_cur_y + 1, 0, 9)
-    elseif k == "a" and (k == "left" or k == "a") and not (k == "a" and setup_ship_idx > 5) then
+    elseif k == "left" or (k == "a" and setup_ship_idx <= 5 and setup_cur_x > 0) then
       setup_cur_x = clamp(setup_cur_x - 1, 0, 9)
     elseif k == "d" or k == "right" then
       setup_cur_x = clamp(setup_cur_x + 1, 0, 9)
     elseif k == "r" then
       setup_dir = (setup_dir == "H") and "V" or "H"
-    elseif k == "auto" or (k == "a" and setup_ship_idx <= 5) then
-      -- Auto-place remaining ships
+    elseif k == "auto" or k == "g" or k == "a" then
+      -- Auto-place all 5 ships
       my_ships, my_board = generate_random_fleet()
       setup_ship_idx = 6
+      fleet_locked = false
       combat_log = "> FLEET AUTO-DEPLOYED. PRESS [ENTER] TO CONFIRM."
     elseif k == "c" then
       init_empty_grids()
       my_ships = {}
       setup_ship_idx = 1
+      setup_cur_x = 0
+      setup_cur_y = 0
+      fleet_locked = false
       combat_log = "> FLEET RESET. PLACE CARRIER (LEN 5)."
+    elseif k == "q" or k == "escape" then
+      timer_cancel("seek_broadcast")
+      NetEngine.clear_tx()
+      game_state = STATE_LOBBY
     elseif k == "enter" or k == "space" then
       if setup_ship_idx <= 5 then
         -- Validate and place current ship
@@ -1928,7 +2065,7 @@ function app.on_key(key)
   end
 end
 
--- Touchscreen Input Handler
+-- Touchscreen & Trackball Input Handler
 function app.on_input(ev)
   if not ev then return end
 
@@ -1937,8 +2074,14 @@ function app.on_input(ev)
     return
   end
 
+  if ev.type == "swipe" and ev.dir then
+    app.on_key(ev.dir)
+    return
+  end
+
   if ev.type == "down" then
     local tx, ty = I(ev.x), I(ev.y)
+    local is_tb_center = (tx == math.floor(W / 2) and ty == math.floor(H / 2))
 
     -- Audio toggle tap (Top right)
     if ty <= 24 and tx >= 230 then
@@ -1958,6 +2101,22 @@ function app.on_input(ev)
         elseif tx >= 165 and tx <= 280 then
           app.on_key("2")
         end
+      elseif is_tb_center then
+        app.on_key("enter")
+      end
+      return
+    end
+
+    -- Retry Modal Taps
+    if show_retry_modal then
+      if ty >= 120 and ty <= 160 then
+        if tx >= 30 and tx <= 155 then
+          app.on_key("1")
+        elseif tx >= 165 and tx <= 290 then
+          app.on_key("2")
+        end
+      elseif is_tb_center then
+        app.on_key("1")
       end
       return
     end
@@ -1976,12 +2135,35 @@ function app.on_input(ev)
       return
     end
 
-    -- Fleet Placement Taps (Deployment Grid)
+    -- Fleet Placement Taps (Deployment Grid, Right Panel, Bottom Bar, Trackball Press)
     if game_state == STATE_SETUP then
+      if fleet_locked then
+        if ty >= bot_y and tx >= 235 then
+          app.on_key("q")
+        elseif ty >= bot_y and tx >= 165 and tx < 235 then
+          app.on_key("c")
+        else
+          app.on_key("enter")
+        end
+        return
+      end
+
+      if setup_ship_idx > 5 then
+        if ty >= bot_y and tx >= 235 then
+          app.on_key("c")
+        else
+          app.on_key("enter")
+        end
+        return
+      end
+
       local gx = target_panel.x + 2
       local gy = target_panel.y + 2
       local span = cell_sz * 10
-      if tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
+      if is_tb_center then
+        app.on_key("enter")
+        return
+      elseif tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
         local cell_x = math.floor((tx - gx) / cell_sz)
         local cell_y = math.floor((ty - gy) / cell_sz)
         setup_cur_x = clamp(cell_x, 0, 9)
@@ -1989,8 +2171,11 @@ function app.on_input(ev)
         app.on_key("enter")
         return
       elseif ty >= home_panel.y + home_panel.w - 36 and ty <= home_panel.y + home_panel.w and tx >= home_panel.x then
-        -- Rotate tap
-        app.on_key("r")
+        if tx >= home_panel.x + math.floor(home_panel.w / 2) then
+          app.on_key("auto")
+        else
+          app.on_key("r")
+        end
         return
       elseif ty >= bot_y then
         app.on_key("enter")
@@ -2003,7 +2188,10 @@ function app.on_input(ev)
       local gx = target_panel.x + 2
       local gy = target_panel.y + 2
       local span = cell_sz * 10
-      if tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
+      if is_tb_center then
+        NetEngine.fire_shot(target_cur_x, target_cur_y)
+        return
+      elseif tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
         local cell_x = math.floor((tx - gx) / cell_sz)
         local cell_y = math.floor((ty - gy) / cell_sz)
         target_cur_x = clamp(cell_x, 0, 9)

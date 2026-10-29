@@ -67,11 +67,19 @@ local function mock_wada(w, h)
       millis = function() return os.clock() * 1000 end,
     },
     store = {
-      get = function(k, d)
-        if storekv[k] == nil then return d end
+      get = function(k, ...)
+        if storekv[k] == nil then
+          -- Emulate LuaAppHost.cpp storeGet stack quirk: 1-arg call returns wada.storetab table
+          if select("#", ...) == 0 then return storekv end
+          return select(1, ...)
+        end
         return storekv[k]
       end,
       set = function(k, v)
+        if v ~= nil then
+          local line_len = #tostring(k) + 1 + #tostring(v) + 1
+          assert(line_len < 192, string.format("store line '%s' (%d bytes) exceeds LuaAppHost 192-byte buffer", tostring(k), line_len))
+        end
         storekv[k] = v
       end,
     },
