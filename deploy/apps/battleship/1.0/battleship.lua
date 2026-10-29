@@ -62,8 +62,8 @@ local cv = nil
 local cell_sz = 14
 local target_panel = { x = 10,  y = 32, w = 144, h = 144 }
 local home_panel   = { x = 166, y = 32, w = 144, h = 144 }
-local bot_y = 184
-local bot_h = 56
+local bot_y = 182
+local bot_h = 48
 
 local function compute_layout(w, h)
   W = I(w or 320)
@@ -76,17 +76,17 @@ local function compute_layout(w, h)
     target_panel.w = pw; target_panel.h = pw
     home_panel.w = pw;   home_panel.h = pw
     target_panel.x = 8;  home_panel.x = 124
-    target_panel.y = 26; home_panel.y = 26
-    bot_y = 136;         bot_h = H - bot_y
+    target_panel.y = 32; home_panel.y = 32
+    bot_y = 150;         bot_h = math.max(40, H - bot_y)
   elseif H < 230 then
-    -- Compact landscape (e.g. T-Deck 320x208 below system title bar)
+    -- Compact landscape (LilyGo T-Deck 320x208..216 below title bar)
     cell_sz = 12
     local pw = 10 * cell_sz + 4
     target_panel.w = pw; target_panel.h = pw
     home_panel.w = pw;   home_panel.h = pw
-    target_panel.x = 10; home_panel.x = 146
-    target_panel.y = 26; home_panel.y = 26
-    bot_y = 154;         bot_h = H - bot_y
+    target_panel.x = 10; home_panel.x = 166
+    target_panel.y = 32; home_panel.y = 32
+    bot_y = 160;         bot_h = math.max(42, H - bot_y)
   else
     -- Standard landscape (320x240 LilyGo T-Deck / 480x240)
     cell_sz = 14
@@ -95,7 +95,7 @@ local function compute_layout(w, h)
     home_panel.w = pw;   home_panel.h = pw
     target_panel.x = 10; home_panel.x = 166
     target_panel.y = 32; home_panel.y = 32
-    bot_y = 184;         bot_h = 56
+    bot_y = 182;         bot_h = math.max(48, H - bot_y)
   end
 end
 
@@ -847,7 +847,7 @@ function NetEngine.start_retry_timer()
       tx_pending.retries = tx_pending.retries + 1
       if tx_pending.retries > 5 then
         show_retry_modal = true
-        combat_log = "> TX TIMEOUT: 5 RETRIES FAILED. AWAITING USER COMMAND."
+        combat_log = "> TX TIMEOUT: 5 RETRIES FAILED."
         if draw_screen then draw_screen() end
       else
         tx_pending.next_wait = 6000 + (tx_pending.retries * 2000)
@@ -936,7 +936,7 @@ function NetEngine.join_lobby()
   setup_cur_x = 0
   setup_cur_y = 0
   game_state = STATE_SETUP
-  combat_log = "> ENTERING FLEET SETUP BEFORE SEEKING HOST..."
+  combat_log = "> FLEET SETUP: PLACE SHIPS TO SEEK HOST."
   if draw_screen then draw_screen() end
 end
 
@@ -977,7 +977,7 @@ function NetEngine.lock_in_fleet()
     if handshake_seed >= enemy_seed then
       local_seq = 1
       game_state = STATE_MY_TURN
-      combat_log = "> HANDSHAKE OK. HIGH SEED: YOU FIRE FIRST!"
+      combat_log = "> HANDSHAKE OK. YOU FIRE FIRST!"
       sfx_play("TURN_ALERT")
     else
       local_seq = 1
@@ -996,7 +996,7 @@ function NetEngine.lock_in_fleet()
     local seek_pkt = string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq)
     local sent_ok, sent_err = mesh_send("Public", seek_pkt)
     if sent_ok then
-      combat_log = string.format("> FLEET LOCKED! BROADCASTING SEEK [%s]...", match_id)
+      combat_log = string.format("> SEEK [%s]: BROADCASTING BEACON...", match_id)
       if sys.toast then pcall(sys.toast, "Hosting [" .. match_id .. "] - Waiting for peer") end
     else
       combat_log = string.format("> SEEK [%s] (%s) - [ENT] RETRY", match_id, tostring(sent_err or "WAIT"))
@@ -1012,7 +1012,7 @@ function NetEngine.lock_in_fleet()
     end)
   else
     if opponent_id ~= "" and match_id ~= "" then
-      combat_log = string.format("> FLEET LOCKED! JOINING HOST [%s] (%s)...", match_id, enemy_callsign)
+      combat_log = string.format("> JOINING HOST [%s] (%s)...", match_id, enemy_callsign:sub(1, 8))
       if sys.toast then pcall(sys.toast, "Joining Host [" .. match_id .. "]...") end
       local payload = string.format("BS|JOIN|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
       NetEngine.queue_tx(payload, 0)
@@ -1020,7 +1020,7 @@ function NetEngine.lock_in_fleet()
       seek_beacon_seq = seek_beacon_seq + 1
       local sent_ok, sent_err = mesh_send("Public", string.format("BS|JOIN_SEEK|0|%d|%s|%d", handshake_seed, my_board_hash, seek_beacon_seq))
       if sent_ok then
-        combat_log = "> FLEET LOCKED! SCANNING FOR HOST LOBBY..."
+        combat_log = "> SCANNING MESH FOR HOST LOBBY..."
         if sys.toast then pcall(sys.toast, "Fleet locked! Scanning for Host...") end
       else
         combat_log = string.format("> SCANNING FOR HOST (%s)...", tostring(sent_err or "WAIT"))
@@ -1099,12 +1099,12 @@ function NetEngine.process_packet(sender, text)
       if handshake_seed >= enemy_seed then
         local_seq = 1
         game_state = STATE_MY_TURN
-        combat_log = "> CHALLENGER JOINED! HIGH SEED: YOU FIRE FIRST!"
+        combat_log = "> PEER JOINED! YOU FIRE FIRST!"
         sfx_play("TURN_ALERT")
       else
         local_seq = 1
         game_state = STATE_ENEMY_TURN
-        combat_log = "> CHALLENGER JOINED! ENEMY FIRES FIRST. BRACE!"
+        combat_log = "> PEER JOINED! ENEMY FIRES FIRST."
       end
       save_match_state()
       if draw_screen then draw_screen() end
@@ -1127,12 +1127,12 @@ function NetEngine.process_packet(sender, text)
       if handshake_seed > enemy_seed then
         local_seq = 1
         game_state = STATE_MY_TURN
-        combat_log = "> HANDSHAKE CONFIRMED! HIGH SEED: YOU FIRE FIRST!"
+        combat_log = "> HANDSHAKE OK! YOU FIRE FIRST!"
         sfx_play("TURN_ALERT")
       else
         local_seq = 1
         game_state = STATE_ENEMY_TURN
-        combat_log = "> HANDSHAKE CONFIRMED! ENEMY FIRES FIRST. BRACE!"
+        combat_log = "> HANDSHAKE OK! ENEMY FIRES FIRST."
       end
       save_match_state()
       if draw_screen then draw_screen() end
@@ -1182,7 +1182,7 @@ function NetEngine.process_packet(sender, text)
     -- Dropped ACK Fix: Defender receives duplicate FIRE for seq - 1
     if seq == local_seq - 1 and last_sent_res then
       mesh_send(opponent_id, last_sent_res.payload)
-      combat_log = string.format("> RE-TX LAST RES FOR DROPPED ACK [Seq %d]", seq)
+      combat_log = string.format("> RE-TX LAST RES [Seq %d]...", seq)
       if draw_screen then draw_screen() end
       return
     end
@@ -1218,7 +1218,7 @@ function NetEngine.process_packet(sender, text)
         ship_id = target_sid
         if my_sunk_count >= 5 then
           status = "W"
-          combat_log = string.format("> ENEMY SUNK YOUR %s! ALL FLEET LOST!", SHIP_SPECS[target_sid].name)
+          combat_log = string.format("> ENEMY SUNK YOUR %s! FLEET LOST!", SHIP_SPECS[target_sid].abbr)
         else
           status = "S"
           combat_log = string.format("> ENEMY SUNK YOUR %s!", SHIP_SPECS[target_sid].name)
@@ -1302,9 +1302,9 @@ function NetEngine.process_packet(sender, text)
       trigger_shake("target", true)
       local sname = SHIP_SPECS[ship_id] and SHIP_SPECS[ship_id].name or "WARSHIP"
       if status == "W" then
-        combat_log = string.format("> VICTORY! ENEMY'S FINAL %s SUNK!", sname)
+        combat_log = string.format("> VICTORY! ENEMY %s SUNK!", sname)
       else
-        combat_log = string.format("> TARGET SUNK: ENEMY %s DESTROYED!", sname)
+        combat_log = string.format("> ENEMY %s SUNK!", sname)
       end
     end
 
@@ -1361,7 +1361,7 @@ function NetEngine.process_packet(sender, text)
     if verified then
       audit_passed = true
       audit_status_msg = "[AUDIT PASSED: VERIFIED MATCH]"
-      combat_log = "> AUDIT PASSED: HASH & LOG VALIDATED. FAIR COMBAT."
+      combat_log = "> AUDIT PASSED: MATCH VALIDATED."
       if my_sunk_count < 5 then
         career_stats.wins = career_stats.wins + 1
       else
@@ -1398,7 +1398,13 @@ end
 
 local function draw_text(x, y, str, col, sz)
   if not cv or not str or str == "" then return end
-  cv:text(I(x), I(y), tostring(str), col or COL_TEXT_BRIGHT, sz or 12)
+  local s = tostring(str)
+  local avail_w = W - I(x)
+  local max_chars = math.floor(avail_w / 7.2)
+  if max_chars > 3 and #s > max_chars then
+    s = s:sub(1, max_chars - 1) .. "."
+  end
+  cv:text(I(x), I(y), s, col or COL_TEXT_BRIGHT, sz or 12)
 end
 
 local function draw_line(x1, y1, x2, y2, col, width)
@@ -1408,10 +1414,10 @@ end
 
 -- ---- Screen Renderers -------------------------------------------------------
 
--- Draw Top Telemetry Bar (320x24)
+-- Draw Top Telemetry Bar (320x18)
 local function draw_top_bar()
-  box(0, 0, 320, 24, COL_BAR_BG, nil)
-  draw_line(0, 24, 320, 24, COL_BORDER_NORM, 1)
+  box(0, 0, W, 18, COL_BAR_BG, nil)
+  draw_line(0, 18, W, 18, COL_BORDER_NORM, 1)
 
   -- State indicator (Left)
   local state_text = "[IDLE]"
@@ -1445,7 +1451,7 @@ local function draw_top_bar()
     state_text = "[GRID STRIKE]"
     state_col  = COL_TEXT_BRIGHT
   end
-  draw_text(6, 6, state_text, state_col, 12)
+  draw_text(6, 3, state_text, state_col, 12)
 
   -- Lockstep telemetry & retry counter (Center-Right)
   local telem_text = ""
@@ -1458,18 +1464,18 @@ local function draw_top_bar()
   elseif game_state == STATE_SETUP and match_id ~= "" then
     telem_text = string.format("ID:%s", match_id)
   end
-  draw_text(130, 6, telem_text, COL_TEXT_DIM, 12)
+  draw_text(118, 3, telem_text, COL_TEXT_DIM, 12)
 
   -- Audio Mute Indicator
   local snd_str = sound_on and "[VOL]" or "[MUTE]"
-  draw_text(240, 6, snd_str, sound_on and COL_STATUS_GREEN or COL_HIT, 12)
+  draw_text(236, 3, snd_str, sound_on and COL_STATUS_GREEN or COL_HIT, 12)
 
   -- Fleet Health Pips (5 Green dots for Home, 5 dots for Enemy)
-  local pips_x = 286
+  local pips_x = 282
   for i = 1, 5 do
     local is_damaged = (my_ship_hits[i] or 0) >= SHIP_SPECS[i].len
     local pip_col = is_damaged and COL_HIT or COL_OWN_FLEET
-    cv:rect(pips_x + (i - 1) * 6, 9, 4, 6, pip_col, true)
+    cv:rect(pips_x + (i - 1) * 7, 6, 5, 6, pip_col, true)
   end
 end
 
@@ -1481,8 +1487,8 @@ local function draw_target_radar()
   local span = cell_sz * 10
   local pw = target_panel.w
 
+  draw_text(target_panel.x + 2, 19, "TARGET RADAR", COL_TEXT_DIM, 12)
   box(px, py, pw, pw, COL_PANEL_BG, bcol)
-  draw_text(px + 4, py - 9, "TARGET RADAR", COL_TEXT_DIM, 12)
 
   local gx = px + 2
   local gy = py + 2
@@ -1538,8 +1544,8 @@ local function draw_home_fleet()
   local span = cell_sz * 10
   local pw = home_panel.w
 
+  draw_text(home_panel.x + 2, 19, "HOME FLEET", COL_TEXT_DIM, 12)
   box(px, py, pw, pw, COL_PANEL_BG, bcol)
-  draw_text(px + 4, py - 9, "HOME FLEET", COL_TEXT_DIM, 12)
 
   local gx = px + 2
   local gy = py + 2
@@ -1590,8 +1596,8 @@ local function draw_setup_screen()
   local pw = target_panel.w
   local span = cell_sz * 10
 
+  draw_text(px + 2, 19, "DEPLOYMENT GRID", COL_TEXT_DIM, 12)
   box(px, py, pw, pw, COL_PANEL_BG, COL_STATUS_GREEN)
-  draw_text(px + 4, py - 9, "DEPLOYMENT GRID", COL_TEXT_DIM, 12)
 
   local gx = px + 2
   local gy = py + 2
@@ -1654,10 +1660,12 @@ local function draw_setup_screen()
   local rx = home_panel.x
   local ry = home_panel.y
   local rw = home_panel.w
-  box(rx, ry, rw, rw, COL_PANEL_BG, COL_BORDER_NORM)
-  draw_text(rx + 6, ry + 6, "FLEET STATUS", COL_STATUS_GREEN, 12)
+  local rh = home_panel.h
 
-  local sy = ry + 22
+  draw_text(rx + 2, 19, "FLEET STATUS", COL_STATUS_GREEN, 12)
+  box(rx, ry, rw, rh, COL_PANEL_BG, COL_BORDER_NORM)
+
+  local sy = ry + 5
   for i = 1, 5 do
     local spec = SHIP_SPECS[i]
     local placed = (my_ships[i] ~= nil)
@@ -1667,143 +1675,149 @@ local function draw_setup_screen()
     local col = placed and COL_OWN_FLEET or (is_cur and COL_RETICLE or COL_TEXT_DIM)
     draw_text(rx + 6, sy, txt, col, 12)
     local status_mark = placed and "[OK]" or (is_cur and "[AIM]" or "[..]")
-    draw_text(rx + rw - 36, sy, status_mark, col, 12)
-    sy = sy + 15
+    draw_text(rx + rw - 34, sy, status_mark, col, 12)
+    sy = sy + 13
   end
 
-  draw_line(rx + 4, ry + rw - 36, rx + rw - 4, ry + rw - 36, COL_GRID_LINE, 1)
+  -- Clean divider line below 5.DD(2) without overlapping
+  draw_line(rx + 4, ry + 73, rx + rw - 4, ry + 73, COL_GRID_LINE, 1)
+
   if fleet_locked then
-    box(rx + 4, ry + rw - 32, rw - 8, 28, COL_BAR_BG, COL_STATUS_AMBER)
-    draw_text(rx + 10, ry + rw - 29, is_host and "WAITING FOR PEER" or "SCANNING MESH...", COL_STATUS_AMBER, 12)
-    draw_text(rx + 10, ry + rw - 16, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
+    box(rx + 4, ry + 77, rw - 8, 36, COL_BAR_BG, COL_STATUS_AMBER)
+    draw_text(rx + 8, ry + 82, is_host and "WAITING PEER" or "SCANNING...", COL_STATUS_AMBER, 12)
+    draw_text(rx + 14, ry + 97, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
   elseif setup_ship_idx <= 5 then
     local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
-    draw_text(rx + 6, ry + rw - 30, rot_txt, COL_RETICLE, 12)
-    draw_text(rx + 6, ry + rw - 16, "[R] Rot  [A] Auto", COL_TEXT_BRIGHT, 12)
+    draw_text(rx + 8, ry + 80, rot_txt, COL_RETICLE, 12)
+    draw_text(rx + 8, ry + 96, "[R] Rot  [A] Auto", COL_TEXT_BRIGHT, 12)
   else
-    box(rx + 4, ry + rw - 32, rw - 8, 28, 0x0B2E1C, COL_STATUS_GREEN)
-    draw_text(rx + 8, ry + rw - 29, "FLEET READY!", COL_STATUS_GREEN, 12)
-    draw_text(rx + 8, ry + rw - 16, "[CONFIRM & BATTLE]", COL_TEXT_BRIGHT, 12)
+    box(rx + 4, ry + 77, rw - 8, 36, 0x0B2E1C, COL_STATUS_GREEN)
+    draw_text(rx + 16, ry + 82, "FLEET READY!", COL_STATUS_GREEN, 12)
+    draw_text(rx + 10, ry + 97, "[CONFIRM & PLAY]", COL_TEXT_BRIGHT, 12)
   end
 
   -- Bottom Bar
   box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
+  draw_line(0, bot_y, W, bot_y, COL_BORDER_NORM, 1)
   if fleet_locked then
-    draw_text(10, bot_y + 6, combat_log, COL_STATUS_AMBER, 12)
-    draw_text(10, bot_y + 24, "[Enter/Tap] Re-send Beacon   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, 12)
+    draw_text(10, bot_y + 4, combat_log, COL_STATUS_AMBER, 12)
+    draw_text(10, bot_y + 20, "[Enter] Re-send   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, 12)
   elseif setup_ship_idx <= 5 then
-    draw_text(10, bot_y + 6, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, 12)
-    draw_text(10, bot_y + 24, "[WASD] Aim  [R] Rotate  [Ent] Place  [A] Auto", COL_TEXT_BRIGHT, 12)
+    draw_text(10, bot_y + 4, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, 12)
+    draw_text(10, bot_y + 20, "[WASD] Aim  [R] Rot  [Ent] Place  [A] Auto", COL_TEXT_BRIGHT, 12)
   else
-    draw_text(10, bot_y + 6, "ALL 5 SHIPS DEPLOYED! READY TO LOCK IN FLEET.", COL_STATUS_GREEN, 12)
-    draw_text(10, bot_y + 24, "[Enter/Space/Tap] CONFIRM & BATTLE   [C] Reset", COL_TEXT_BRIGHT, 12)
+    draw_text(10, bot_y + 4, "FLEET DEPLOYED! READY FOR BATTLE.", COL_STATUS_GREEN, 12)
+    draw_text(10, bot_y + 20, "[Enter/Space] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, 12)
   end
 end
 
 -- Draw Bottom Combat Log & Key Hints Bar
 local function draw_bottom_bar()
   box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
+  draw_line(0, bot_y, W, bot_y, COL_BORDER_NORM, 1)
+
+  if game_state == STATE_AUDIT or game_state == STATE_GAME_OVER then
+    local banner_col = audit_passed and COL_STATUS_GREEN or COL_HIT
+    draw_text(10, bot_y + 4, audit_status_msg, banner_col, 12)
+    draw_text(10, bot_y + 20, "[Enter/Space] RETURN TO LOBBY  [M] Mute", COL_RETICLE, 12)
+    return
+  end
 
   -- Combat log / action status line
-  draw_text(10, bot_y + 6, combat_log, COL_TEXT_BRIGHT, 12)
+  draw_text(10, bot_y + 4, combat_log, COL_TEXT_BRIGHT, 12)
 
   -- Contextual key hints
   local hints = ""
   if game_state == STATE_MY_TURN then
     if tx_pending ~= nil then
-      hints = "[WAITING FOR PACKET ACK]  [M] Mute Audio"
+      hints = "[WAITING FOR PACKET ACK]  [M] Mute"
     else
-      hints = string.format("[WASD] Aim (%s)  [Enter/Space] FIRE TORPEDO  [M] Mute", format_coord(target_cur_x, target_cur_y))
+      hints = string.format("[WASD] Aim (%s)  [Enter] FIRE  [M] Mute", format_coord(target_cur_x, target_cur_y))
     end
   elseif game_state == STATE_ENEMY_TURN then
-    hints = "[DEFENDING]  Enemy radar calculating vector...  [M] Mute"
-  elseif game_state == STATE_AUDIT or game_state == STATE_GAME_OVER then
-    hints = "[Enter/Space] RETURN TO LOBBY  [M] Mute"
+    hints = "[DEFENDING] Awaiting enemy shot... [M] Mute"
   end
-  draw_text(10, bot_y + 24, hints, COL_RETICLE, 12)
+  draw_text(10, bot_y + 20, hints, COL_RETICLE, 12)
 end
 
 -- Draw Main Lobby Screen
 local function draw_lobby_screen()
-  box(0, 0, 320, 240, COL_BG, nil)
+  box(0, 0, W, H, COL_BG, nil)
   draw_top_bar()
 
   -- Tactical Banner
-  box(10, 32, 300, 48, COL_PANEL_BG, COL_BORDER_NORM)
-  draw_text(20, 40, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, 14)
-  draw_text(20, 58, "1v1 LOCKSTEP BATTLESHIP TACTICAL RADAR", COL_TEXT_DIM, 12)
+  box(14, 26, 292, 40, COL_PANEL_BG, COL_BORDER_NORM)
+  draw_text(24, 31, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, 14)
+  draw_text(24, 48, "1v1 LOCKSTEP TACTICAL RADAR", COL_TEXT_DIM, 12)
 
   -- Career Stats Widget
-  box(10, 86, 300, 36, COL_PANEL_BG, COL_BORDER_NORM)
+  box(14, 72, 292, 26, COL_PANEL_BG, COL_BORDER_NORM)
   local win_rate = 0
   if career_stats.matches > 0 then
     win_rate = math.floor((career_stats.wins / career_stats.matches) * 100)
   end
-  local stat_line = string.format("CAREER: %dW - %dL (%d%%) | MATCHES: %d | ACCURACY: %d%%",
-    career_stats.wins, career_stats.losses, win_rate, career_stats.matches,
+  local stat_line = string.format("CAREER: %dW - %dL (%d%%) | ACC: %d%%",
+    career_stats.wins, career_stats.losses, win_rate,
     (career_stats.hits + career_stats.misses) > 0 and math.floor((career_stats.hits / (career_stats.hits + career_stats.misses)) * 100) or 0)
-  draw_text(16, 96, stat_line, COL_STATUS_AMBER, 12)
+  draw_text(24, 78, stat_line, COL_STATUS_AMBER, 12)
 
   -- Menu Options
   local options = {
-    { key = "[1]", title = "HOST LORA MATCH (BROADCAST SEEK)" },
-    { key = "[2]", title = "JOIN LORA MATCH (CHALLENGER DM)" },
+    { key = "[1]", title = "HOST LORA MATCH" },
+    { key = "[2]", title = "JOIN LORA MATCH" },
     { key = "[3]", title = "VS AI (OFFLINE HUNT/TARGET)" },
   }
 
-  local oy = 130
+  local oy = 104
   for i, opt in ipairs(options) do
-    box(10, oy, 300, 22, COL_PANEL_BG, COL_BORDER_NORM)
-    draw_text(20, oy + 4, opt.key, COL_RETICLE, 12)
-    draw_text(50, oy + 4, opt.title, COL_TEXT_BRIGHT, 12)
+    box(14, oy, 292, 22, COL_PANEL_BG, COL_BORDER_NORM)
+    draw_text(24, oy + 4, opt.key, COL_RETICLE, 12)
+    draw_text(52, oy + 4, opt.title, COL_TEXT_BRIGHT, 12)
     oy = oy + 26
   end
 
-  box(0, 214, 320, 26, COL_BAR_BG, COL_BORDER_NORM)
-  draw_text(10, 220, "KEYS: [1] Host  [2] Join  [3] Offline AI  [M] Mute Sound", COL_STATUS_GREEN, 12)
+  local lby = math.max(182, H - 24)
+  box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
+  draw_text(10, lby + 5, "KEYS: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, 12)
 end
 
--- Draw Post-Game / Audit Overlay
+-- Draw Post-Game / Audit Overlay (Kept for interface compatibility, rendered in bottom bar)
 local function draw_audit_overlay()
-  if game_state ~= STATE_AUDIT and game_state ~= STATE_GAME_OVER then return end
-
-  -- Overlay box above bottom bar
-  local banner_col = audit_passed and COL_STATUS_GREEN or COL_HIT
-  box(10, 150, 300, 28, COL_BAR_BG, banner_col)
-  draw_text(16, 158, audit_status_msg, banner_col, 12)
+  -- Status now rendered directly in draw_bottom_bar() to keep radar grid 100% visible
 end
 
 -- Draw Hot-Resume Crash Recovery Modal
 local function draw_resume_modal()
-  box(20, 40, 280, 150, COL_PANEL_BG, COL_RETICLE)
-  draw_text(30, 52, "UNFINISHED MATCH DETECTED!", COL_STATUS_AMBER, 14)
+  box(20, 32, 280, 140, COL_PANEL_BG, COL_RETICLE)
+  draw_text(30, 42, "UNFINISHED MATCH DETECTED!", COL_STATUS_AMBER, 14)
 
   local info = string.format("ID: %s  |  SEQ: %02d", match_id, local_seq)
-  draw_text(30, 78, info, COL_TEXT_BRIGHT, 12)
-  draw_text(30, 96, "State was restored from persistent flash.", COL_TEXT_DIM, 12)
+  draw_text(30, 66, info, COL_TEXT_BRIGHT, 12)
+  draw_text(30, 84, "State restored from flash storage.", COL_TEXT_DIM, 12)
 
-  box(30, 124, 115, 30, COL_BAR_BG, COL_STATUS_GREEN)
-  draw_text(40, 132, "[1] RESUME", COL_STATUS_GREEN, 12)
+  box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_GREEN)
+  draw_text(40, 118, "[1] RESUME", COL_STATUS_GREEN, 12)
 
-  box(165, 124, 115, 30, COL_BAR_BG, COL_HIT)
-  draw_text(175, 132, "[2] ABANDON", COL_HIT, 12)
+  box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
+  draw_text(175, 118, "[2] ABANDON", COL_HIT, 12)
 
-  box(0, 214, 320, 26, COL_BAR_BG, COL_BORDER_NORM)
-  draw_text(10, 220, "Press [1] or [Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, 12)
+  local lby = math.max(182, H - 24)
+  box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
+  draw_text(10, lby + 5, "Press [1]/[Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, 12)
 end
 
 -- Draw Retry / TX Failed Modal
 local function draw_retry_modal()
-  box(25, 45, 270, 140, COL_PANEL_BG, COL_HIT)
-  draw_text(35, 55, "PACKET TRANSMISSION FAILED", COL_HIT, 14)
-  draw_text(35, 78, "5 attempts exceeded without ACK reply.", COL_TEXT_BRIGHT, 12)
-  draw_text(35, 96, "Repeater or opponent node out of range.", COL_TEXT_DIM, 12)
+  box(20, 32, 280, 140, COL_PANEL_BG, COL_HIT)
+  draw_text(30, 42, "TRANSMISSION TIMEOUT", COL_HIT, 14)
+  draw_text(30, 66, "5 attempts exceeded without ACK reply.", COL_TEXT_BRIGHT, 12)
+  draw_text(30, 84, "Peer node unreachable or out of range.", COL_TEXT_DIM, 12)
 
-  box(35, 124, 115, 30, COL_BAR_BG, COL_STATUS_AMBER)
-  draw_text(45, 132, "[1] RESEND NOW", COL_STATUS_AMBER, 12)
+  box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_AMBER)
+  draw_text(40, 118, "[1] RESEND NOW", COL_STATUS_AMBER, 12)
 
-  box(170, 124, 115, 30, COL_BAR_BG, COL_HIT)
-  draw_text(180, 132, "[2] FORFEIT", COL_HIT, 12)
+  box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
+  draw_text(175, 118, "[2] FORFEIT", COL_HIT, 12)
 end
 
 -- Main Draw Screen Router
@@ -1830,7 +1844,6 @@ draw_screen = function()
   draw_top_bar()
   draw_target_radar()
   draw_home_fleet()
-  draw_audit_overlay()
   draw_bottom_bar()
 
   if show_retry_modal then
@@ -1949,7 +1962,7 @@ function app.on_key(key)
         fleet_locked = false
         timer_cancel("seek_broadcast")
         NetEngine.clear_tx()
-        combat_log = "> FLEET UNLOCKED. PRESS [ENTER] TO CONFIRM OR [C] TO RESET."
+        combat_log = "> FLEET UNLOCKED. [ENTER] Confirm [C] Reset"
       elseif k == "q" or k == "escape" then
         fleet_locked = false
         timer_cancel("seek_broadcast")
@@ -1975,7 +1988,7 @@ function app.on_key(key)
       my_ships, my_board = generate_random_fleet()
       setup_ship_idx = 6
       fleet_locked = false
-      combat_log = "> FLEET AUTO-DEPLOYED. PRESS [ENTER] TO CONFIRM."
+      combat_log = "> AUTO-DEPLOYED. [ENTER] Confirm."
     elseif k == "c" then
       init_empty_grids()
       my_ships = {}
@@ -2095,7 +2108,7 @@ function app.on_input(ev)
 
     -- Resume Modal Taps
     if game_state == STATE_RESUME_MODAL then
-      if ty >= 120 and ty <= 160 then
+      if ty >= 105 and ty <= 145 then
         if tx >= 30 and tx <= 145 then
           app.on_key("1")
         elseif tx >= 165 and tx <= 280 then
@@ -2109,7 +2122,7 @@ function app.on_input(ev)
 
     -- Retry Modal Taps
     if show_retry_modal then
-      if ty >= 120 and ty <= 160 then
+      if ty >= 105 and ty <= 145 then
         if tx >= 30 and tx <= 155 then
           app.on_key("1")
         elseif tx >= 165 and tx <= 290 then
@@ -2123,12 +2136,12 @@ function app.on_input(ev)
 
     -- Lobby Menu Taps
     if game_state == STATE_LOBBY then
-      if tx >= 10 and tx <= 310 then
-        if ty >= 130 and ty <= 152 then
+      if tx >= 14 and tx <= 306 then
+        if ty >= 104 and ty <= 126 then
           NetEngine.host_lobby()
-        elseif ty >= 156 and ty <= 178 then
+        elseif ty >= 130 and ty <= 152 then
           NetEngine.join_lobby()
-        elseif ty >= 182 and ty <= 204 then
+        elseif ty >= 156 and ty <= 178 then
           NetEngine.start_vs_ai()
         end
       end
@@ -2170,7 +2183,7 @@ function app.on_input(ev)
         setup_cur_y = clamp(cell_y, 0, 9)
         app.on_key("enter")
         return
-      elseif ty >= home_panel.y + home_panel.w - 36 and ty <= home_panel.y + home_panel.w and tx >= home_panel.x then
+      elseif ty >= home_panel.y + 73 and ty <= home_panel.y + home_panel.h and tx >= home_panel.x and tx <= home_panel.x + home_panel.w then
         if tx >= home_panel.x + math.floor(home_panel.w / 2) then
           app.on_key("auto")
         else
