@@ -65,6 +65,9 @@ local function create_mock_node(name)
       end
     },
     mesh = {
+      channels = function()
+        return { "Public", "#battleship" }
+      end,
       send = function(to_or_tbl, text)
         local to, payload
         if type(to_or_tbl) == "table" then
@@ -114,8 +117,9 @@ app_a.on_key("enter")
 assert(#node_a.outbox > 0, "Node A must broadcast SEEK")
 local seek_pkt = node_a.outbox[#node_a.outbox]
 assert(seek_pkt.text:find("BS|SEEK|"), "Packet must be BS|SEEK")
+assert(seek_pkt.to == "#battleship", "Node A must broadcast on #battleship channel instead of Public! Got: " .. tostring(seek_pkt.to))
 local match_id = seek_pkt.text:match("BS|SEEK|(%w+)|")
-print(string.format("Node A hosted match: ID = %s", match_id))
+print(string.format("Node A hosted match: ID = %s on channel %s", match_id, seek_pkt.to))
 
 -- Load instance for Node B
 _G.wada = node_b.wada
@@ -245,5 +249,68 @@ print("=== TESTING POST-GAME COMMIT-REVEAL AUDIT PASS ===")
 local stats_a = node_a.storekv["career_stats"]
 assert(stats_a ~= nil and stats_a ~= "", "Career stats must be saved after audit")
 print(string.format("Node A Career stats: %s", stats_a))
+
+print("=== TESTING #BATTLESHIP CHANNEL CREATION & FILTERING ===")
+
+-- 1. Test auto-creation hook when #battleship does not exist
+local node_c = create_mock_node("NODE_C_NEW")
+local channel_added = nil
+node_c.wada.mesh.channels = function()
+  if channel_added then return { "Public", channel_added } end
+  return { "Public" }
+end
+node_c.wada.mesh.add_channel = function(chan)
+  channel_added = chan
+  return true
+end
+
+_G.wada = node_c.wada
+local app_c = dofile("battleship.lua")
+app_c.on_open(320, 240)
+app_c.on_key("1") -- Host lobby
+assert(channel_added == "#battleship", "Game must attempt to auto-create #battleship channel when missing!")
+print("OK: Auto-creation hook successfully called with #battleship!")
+
+-- 2. Test missing channel warning when device cannot create channel
+local node_d = create_mock_node("NODE_D_LOCKED")
+node_d.wada.mesh.channels = function() return { "Public" } end
+node_d.wada.mesh.send = function(to, text)
+  if to == "#battleship" then
+    return false, "no such channel"
+  end
+  return true
+end
+
+_G.wada = node_d.wada
+local app_d = dofile("battleship.lua")
+app_d.on_open(320, 240)
+app_d.on_key("1")
+place_all_ships(app_d)
+app_d.on_key("enter") -- lock fleet and broadcast
+assert(#node_d.toasts > 0, "Missing channel must trigger a user-facing toast")
+local last_toast = node_d.toasts[#node_d.toasts]
+assert(last_toast:find("#battleship"), "Toast must instruct user to add #battleship")
+print("OK: Missing #battleship channel cleanly triggers toast guidance: " .. last_toast)
+
+-- 3. Test Inbound Channel Filter
+local node_e = create_mock_node("NODE_E_FILTER")
+_G.wada = node_e.wada
+local app_e = dofile("battleship.lua")
+app_e.on_open(320, 240)
+app_e.on_key("2") -- Join lobby
+place_all_ships(app_e)
+
+-- Message on unrelated channel should be ignored
+app_e.on_message({ from = "STRANGER", kind = "channel", channel = "random_chat", text = "BS|SEEK|TEST|STRANGER|1" })
+local match_e = node_e.storekv["active_match"] or ""
+assert(not match_e:find("TEST"), "Incoming packet on unrelated channel must be ignored")
+
+-- Message on #battleship should be accepted
+app_e.on_message({ from = "VALID_HOST", kind = "channel", channel = "#battleship", text = "BS|SEEK|9999|VALID_HOST|1" })
+-- Confirm host was recognized and joined
+app_e.on_key("enter")
+assert(#node_e.outbox > 0, "Packet on #battleship must be accepted")
+assert(node_e.outbox[#node_e.outbox].text:find("BS|JOIN|9999"), "Must join match heard on #battleship")
+print("OK: Inbound channel filtering successfully verified!")
 
 print("=== ALL EXTENDED 1v1 MULTIPLAYER TESTS PASSED ===")

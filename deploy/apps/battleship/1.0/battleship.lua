@@ -693,26 +693,62 @@ local function verify_enemy_board(salt, fleet_str)
   return true, "AUDIT PASSED: VERIFIED MATCH", grid
 end
 
-local function get_broadcast_channel()
+-- Default Game Broadcast Channel for Lobby & Discovery (isolated from Public)
+local GAME_CHANNEL = "#battleship"
+
+-- Ensure the game hashtag channel exists; attempt programmatic creation if supported
+local function ensure_channel(channel_name)
+  channel_name = channel_name or GAME_CHANNEL
+  -- 1. Try any available programmatic channel creation / join APIs
+  local function try_call(fn, arg)
+    if type(fn) == "function" then pcall(fn, arg) end
+  end
+
+  if mesh then
+    try_call(mesh.join_channel, channel_name)
+    try_call(mesh.add_channel, channel_name)
+    try_call(mesh.create_channel, channel_name)
+    try_call(mesh.set_channel, channel_name)
+  end
+  if wada and wada.mesh and wada.mesh ~= mesh then
+    try_call(wada.mesh.join_channel, channel_name)
+    try_call(wada.mesh.add_channel, channel_name)
+    try_call(wada.mesh.create_channel, channel_name)
+    try_call(wada.mesh.set_channel, channel_name)
+  end
+
+  -- Check if CLI execution hook exists in sys
+  local cli_fn = (sys and (sys.command or sys.cli)) or (wada and wada.sys and (wada.sys.command or wada.sys.cli))
+  if type(cli_fn) == "function" then
+    pcall(cli_fn, "channel join " .. channel_name)
+  end
+
+  -- 2. Inspect configured channels list
   if mesh and mesh.channels then
     local ok, list = pcall(mesh.channels)
-    if ok and type(list) == "table" and #list > 0 then
+    if ok and type(list) == "table" then
       for _, ch in ipairs(list) do
-        if type(ch) == "string" and ch:lower() == "public" then
-          return ch
+        if type(ch) == "string" then
+          local lch = ch:lower()
+          local target = channel_name:lower()
+          local raw_target = target:gsub("^#", "")
+          if lch == target or lch == raw_target or lch == ("#" .. raw_target) then
+            return ch, true
+          end
         end
-      end
-      for _, ch in ipairs(list) do
-        if type(ch) == "string" and ch:lower() == "general" then
-          return ch
-        end
-      end
-      if type(list[1]) == "string" and list[1] ~= "" then
-        return list[1]
       end
     end
   end
-  return "Public"
+
+  return channel_name, false
+end
+
+local function get_broadcast_channel()
+  local ch, exists = ensure_channel(GAME_CHANNEL)
+  if exists then
+    return ch
+  end
+  return GAME_CHANNEL
 end
 
 -- ---- Mesh Transmission Wrapper ----------------------------------------------
@@ -724,11 +760,17 @@ local function mesh_send(to, text)
   if not mesh then return false, "no mesh" end
   local str_text = tostring(text or "")
 
-  if to and to ~= "" and to ~= "Public" and to ~= "broadcast" then
-    local str_to = tostring(to)
+  local to_str = to and tostring(to) or ""
+  local to_lower = to_str:lower()
+  local is_broadcast = (to_str == "") or (to_str == "broadcast") or (to_str == "Public")
+    or (to_lower == GAME_CHANNEL:lower())
+    or (to_lower == "battleship")
+    or (to_lower == "#battleship")
+
+  if not is_broadcast then
     -- 1. Try send_dm for direct peer-to-peer transmission
     if mesh.send_dm then
-      local ok, res, reason = pcall(mesh.send_dm, str_to, str_text)
+      local ok, res, reason = pcall(mesh.send_dm, to_str, str_text)
       if ok then
         if res == true then
           return true
@@ -739,9 +781,9 @@ local function mesh_send(to, text)
         end
       end
     end
-    -- 2. Fallback to mesh.send for test harness or generic routing
+    -- 2. Fallback to mesh.send for test harness or direct routing
     if mesh.send then
-      local ok, res, reason = pcall(mesh.send, str_to, str_text)
+      local ok, res, reason = pcall(mesh.send, to_str, str_text)
       if ok then
         if res == true then
           return true
@@ -754,15 +796,20 @@ local function mesh_send(to, text)
       return false, tostring(res)
     end
   else
-    -- Channel broadcast (Lobby discovery & seek beacons)
-    local chan = get_broadcast_channel()
+    -- Channel broadcast on #battleship (Lobby discovery & seek beacons)
+    local chan, exists = ensure_channel(GAME_CHANNEL)
     if mesh.send then
       local ok, res, reason = pcall(mesh.send, chan, str_text)
       if ok then
         if res == true then
           return true
         elseif res == false then
-          return false, tostring(reason or "send failed")
+          local reason_str = tostring(reason or "send failed")
+          if reason_str == "no such channel" or not exists then
+            combat_log = string.format("> %s NOT FOUND! ADD IN CHATS (+) > #", GAME_CHANNEL)
+            if sys and sys.toast then pcall(sys.toast, "Join " .. GAME_CHANNEL .. " in Chats (+)", 3500) end
+          end
+          return false, reason_str
         else
           return true
         end
@@ -1078,7 +1125,13 @@ function NetEngine.host_lobby()
   setup_cur_x = 0
   setup_cur_y = 0
   game_state = STATE_SETUP
-  combat_log = string.format("> HOSTING MATCH [%s]. PLACE YOUR FLEET.", match_id)
+  local ch, exists = ensure_channel(GAME_CHANNEL)
+  if exists then
+    combat_log = string.format("> HOSTING [%s] ON %s. PLACE YOUR FLEET.", match_id, ch)
+  else
+    combat_log = string.format("> HOST [%s]: %s NOT FOUND! ADD IN CHATS (+)", match_id, GAME_CHANNEL)
+    if sys and sys.toast then pcall(sys.toast, "Join " .. GAME_CHANNEL .. " in Chats (+)", 3000) end
+  end
   if draw_screen then draw_screen() end
 end
 
@@ -1097,7 +1150,13 @@ function NetEngine.join_lobby()
   setup_cur_x = 0
   setup_cur_y = 0
   game_state = STATE_SETUP
-  combat_log = "> FLEET SETUP: PLACE SHIPS TO SEEK HOST."
+  local ch, exists = ensure_channel(GAME_CHANNEL)
+  if exists then
+    combat_log = string.format("> SEEKING ON %s: PLACE SHIPS TO LOCK FLEET.", ch)
+  else
+    combat_log = string.format("> SEEK: %s NOT FOUND! ADD IN CHATS (+)", GAME_CHANNEL)
+    if sys and sys.toast then pcall(sys.toast, "Join " .. GAME_CHANNEL .. " in Chats (+)", 3000) end
+  end
   if draw_screen then draw_screen() end
 end
 
@@ -1155,10 +1214,10 @@ function NetEngine.lock_in_fleet()
   if is_host then
     seek_beacon_seq = seek_beacon_seq + 1
     local seek_pkt = string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq)
-    local sent_ok, sent_err = mesh_send("Public", seek_pkt)
+    local sent_ok, sent_err = mesh_send(GAME_CHANNEL, seek_pkt)
     if sent_ok then
-      combat_log = string.format("> SEEK [%s]: BROADCASTING BEACON...", match_id)
-      if sys.toast then pcall(sys.toast, "Hosting [" .. match_id .. "] - Waiting for peer") end
+      combat_log = string.format("> SEEK [%s] ON %s: BROADCASTING...", match_id, GAME_CHANNEL)
+      if sys.toast then pcall(sys.toast, "Hosting [" .. match_id .. "] on " .. GAME_CHANNEL) end
     else
       if sent_err == "permission denied" then
         combat_log = "> PERM DENIED: ENABLE IN SETTINGS > APP PERMS"
@@ -1168,6 +1227,9 @@ function NetEngine.lock_in_fleet()
         if sys.toast then pcall(sys.toast, "Allow broadcast popup, then [Enter]", 2500) end
       elseif sent_err == "too fast" then
         combat_log = string.format("> SEEK [%s]: RADIO BUSY. WAIT 5s & [ENT] RETRY", match_id)
+      elseif sent_err == "no such channel" then
+        combat_log = string.format("> %s NOT FOUND! ADD IN CHATS (+) > #", GAME_CHANNEL)
+        if sys.toast then pcall(sys.toast, "Add " .. GAME_CHANNEL .. " in Chats (+)", 3500) end
       else
         combat_log = string.format("> SEEK [%s] (%s) - [ENT] RETRY", match_id, tostring(sent_err or "WAIT"))
       end
@@ -1176,7 +1238,7 @@ function NetEngine.lock_in_fleet()
     timer_every("seek_broadcast", 15000, function()
       if game_state == STATE_SETUP and is_host and opponent_id == "" then
         seek_beacon_seq = seek_beacon_seq + 1
-        mesh_send("Public", string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq))
+        mesh_send(GAME_CHANNEL, string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq))
       else
         timer_cancel("seek_broadcast")
       end
@@ -1189,10 +1251,10 @@ function NetEngine.lock_in_fleet()
       NetEngine.queue_tx(payload, 0)
     else
       seek_beacon_seq = seek_beacon_seq + 1
-      local sent_ok, sent_err = mesh_send("Public", string.format("BS|JOIN_SEEK|0|%d|%s|%d", handshake_seed, my_board_hash, seek_beacon_seq))
+      local sent_ok, sent_err = mesh_send(GAME_CHANNEL, string.format("BS|JOIN_SEEK|0|%d|%s|%d", handshake_seed, my_board_hash, seek_beacon_seq))
       if sent_ok then
-        combat_log = "> SCANNING MESH FOR HOST LOBBY..."
-        if sys.toast then pcall(sys.toast, "Fleet locked! Scanning for Host...") end
+        combat_log = string.format("> SCANNING %s FOR HOST LOBBY...", GAME_CHANNEL)
+        if sys.toast then pcall(sys.toast, "Fleet locked! Scanning " .. GAME_CHANNEL .. "...") end
       else
         if sent_err == "permission denied" then
           combat_log = "> PERM DENIED: ENABLE IN SETTINGS > APP PERMS"
@@ -1202,6 +1264,9 @@ function NetEngine.lock_in_fleet()
           if sys.toast then pcall(sys.toast, "Allow broadcast popup, then [Enter]", 2500) end
         elseif sent_err == "too fast" then
           combat_log = "> SCAN: RADIO BUSY. WAIT 5s & [ENT] RETRY"
+        elseif sent_err == "no such channel" then
+          combat_log = string.format("> %s NOT FOUND! ADD IN CHATS (+) > #", GAME_CHANNEL)
+          if sys.toast then pcall(sys.toast, "Add " .. GAME_CHANNEL .. " in Chats (+)", 3500) end
         else
           combat_log = string.format("> SCANNING FOR HOST (%s)...", tostring(sent_err or "WAIT"))
         end
@@ -1243,7 +1308,7 @@ function NetEngine.process_packet(sender, text)
       if sender and sender ~= "" then
         mesh_send(sender, seek_pkt)
       else
-        mesh_send("Public", seek_pkt)
+        mesh_send(GAME_CHANNEL, seek_pkt)
       end
       combat_log = string.format("> PEER DETECTED (%s). SENT SEEK [%s]...", tostring(sender or "PEER"), match_id)
       if draw_screen then draw_screen() end
@@ -1942,8 +2007,8 @@ local function draw_lobby_screen()
 
   -- Menu Options
   local options = {
-    { key = "[1]", title = "HOST LORA MATCH" },
-    { key = "[2]", title = "JOIN LORA MATCH" },
+    { key = "[1]", title = "HOST LORA MATCH (#battleship)" },
+    { key = "[2]", title = "JOIN LORA MATCH (#battleship)" },
     { key = "[3]", title = "VS AI (OFFLINE HUNT/TARGET)" },
   }
 
@@ -1955,9 +2020,14 @@ local function draw_lobby_screen()
     oy = oy + 26
   end
 
+  local _, ch_exists = ensure_channel(GAME_CHANNEL)
   local lby = math.max(182, H - 24)
   box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
-  draw_text(10, lby + 5, "KEYS: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, 12)
+  if ch_exists then
+    draw_text(10, lby + 5, "KEYS: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, 12)
+  else
+    draw_text(10, lby + 5, "[!] #battleship NOT FOUND. ADD IN CHATS (+)", COL_STATUS_AMBER, 12)
+  end
 end
 
 -- Draw Post-Game / Audit Overlay (Kept for interface compatibility, rendered in bottom bar)
@@ -2406,6 +2476,17 @@ function app.on_message(m)
   if not m then return end
   local sender = m.from or m.sender or ""
   local text = m.text or m.payload or ""
+
+  -- If message arrived over a channel, verify it is on #battleship (or legacy fallback)
+  if m.kind == "channel" and m.channel and m.channel ~= "" then
+    local ch = m.channel:lower()
+    local target = GAME_CHANNEL:lower()
+    local raw_target = target:gsub("^#", "")
+    if ch ~= target and ch ~= raw_target and ch ~= ("#" .. raw_target) and ch ~= "public" then
+      return
+    end
+  end
+
   NetEngine.process_packet(sender, text)
 end
 

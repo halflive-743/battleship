@@ -108,6 +108,9 @@ local function mock_wada(w, h)
       end,
     },
     mesh = {
+      channels = function()
+        return { "Public", "#battleship" }
+      end,
       send = function(to_or_tbl, text)
         local to, payload
         if type(to_or_tbl) == "table" then
