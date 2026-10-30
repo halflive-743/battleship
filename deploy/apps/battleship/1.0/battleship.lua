@@ -1160,8 +1160,12 @@ function NetEngine.lock_in_fleet()
       combat_log = string.format("> SEEK [%s]: BROADCASTING BEACON...", match_id)
       if sys.toast then pcall(sys.toast, "Hosting [" .. match_id .. "] - Waiting for peer") end
     else
-      if sent_err == "permission requested" then
+      if sent_err == "permission denied" then
+        combat_log = "> PERM DENIED: ENABLE IN SETTINGS > APP PERMS"
+        if sys.toast then pcall(sys.toast, "Enable in Settings > App permissions", 3000) end
+      elseif sent_err == "permission requested" then
         combat_log = string.format("> SEEK [%s]: ALLOW IN SYSTEM POPUP & [ENT] RETRY", match_id)
+        if sys.toast then pcall(sys.toast, "Allow broadcast popup, then [Enter]", 2500) end
       elseif sent_err == "too fast" then
         combat_log = string.format("> SEEK [%s]: RADIO BUSY. WAIT 5s & [ENT] RETRY", match_id)
       else
@@ -1190,8 +1194,12 @@ function NetEngine.lock_in_fleet()
         combat_log = "> SCANNING MESH FOR HOST LOBBY..."
         if sys.toast then pcall(sys.toast, "Fleet locked! Scanning for Host...") end
       else
-        if sent_err == "permission requested" then
+        if sent_err == "permission denied" then
+          combat_log = "> PERM DENIED: ENABLE IN SETTINGS > APP PERMS"
+          if sys.toast then pcall(sys.toast, "Enable in Settings > App permissions", 3000) end
+        elseif sent_err == "permission requested" then
           combat_log = "> SCAN: ALLOW IN SYSTEM POPUP & [ENT] RETRY"
+          if sys.toast then pcall(sys.toast, "Allow broadcast popup, then [Enter]", 2500) end
         elseif sent_err == "too fast" then
           combat_log = "> SCAN: RADIO BUSY. WAIT 5s & [ENT] RETRY"
         else
